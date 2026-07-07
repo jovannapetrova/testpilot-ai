@@ -20,7 +20,7 @@ React Dashboard -> FastAPI Backend -> Agent Orchestrator
 ## Tech Stack
 
 - Frontend: React, Vite, Axios, Recharts, Framer Motion, Lucide React
-- Backend: FastAPI, Python 3.12, Pydantic
+- Backend: FastAPI, Python 3.11, Pydantic
 - Quality/Security: Bandit, Radon, Pytest, Coverage.py
 - Reports: ReportLab + JSON
 - Free deployment: Vercel frontend + Render backend
@@ -60,16 +60,20 @@ TestPilot AI is ready for a split deployment with the backend on Render and the 
 
 ### Render Backend
 
+Use the root-level `render.yaml` Blueprint when connecting the GitHub repository to Render. It pins Python to `3.11.9`, sets `backend` as the service root, and configures the health check and startup command for Render Free.
+
 - Root directory: `backend`
-- Build command: `pip install -r requirements.txt`
+- Build command: `python -m pip install --upgrade pip && pip install -r requirements.txt`
 - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
 
 Required environment variables:
 
 ```bash
+PYTHON_VERSION=3.11.9
 LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
+ENABLE_TEST_EXECUTION=false
 ```
 
 ### Vercel Frontend

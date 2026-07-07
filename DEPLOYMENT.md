@@ -4,12 +4,26 @@ TestPilot AI is split into a FastAPI backend and a Vite/React frontend.
 
 ## Backend on Render
 
-Create a Render Web Service from the repository and set the root directory to `backend`.
+Use the root-level `render.yaml` Blueprint when connecting the GitHub repository to Render. The Blueprint pins Python to `3.11.9`, sets the backend root directory, and configures the build/start commands.
+
+Render was previously able to choose Python `3.14.x` when the service was created manually or when a non-root Blueprint was not detected. Python 3.14 is newer than the wheel support used by this backend's pinned Pydantic stack, so `pydantic-core` tried to build from source with Rust/maturin. The root Blueprint and `.python-version` files prevent that by forcing Python 3.11 before dependency installation.
+
+Blueprint file:
+
+```text
+render.yaml
+```
+
+Service root directory:
+
+```text
+backend
+```
 
 Build command:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install --upgrade pip && pip install -r requirements.txt
 ```
 
 Start command:
@@ -21,8 +35,10 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 Environment variables:
 
 ```bash
+PYTHON_VERSION=3.11.9
 LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
+ENABLE_TEST_EXECUTION=false
 ```
 
 Health check path:
