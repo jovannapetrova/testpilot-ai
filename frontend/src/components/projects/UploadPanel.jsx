@@ -57,9 +57,9 @@ export default function UploadPanel() {
       setStatus("success");
       setMessage(result.message || "Project uploaded successfully.");
       setSummary(result);
-    } catch {
+    } catch (error) {
       setStatus("error");
-      setMessage("Upload failed. Check if backend is running.");
+      setMessage(error.userMessage || "Upload failed. Check the backend connection.");
       setSummary(null);
     }
   };
@@ -83,8 +83,9 @@ export default function UploadPanel() {
 
       setAnalysisStatus("success");
       setAnalysisReport(result.report);
-    } catch {
+    } catch (error) {
       setAnalysisStatus("error");
+      setMessage(error.userMessage || "Analysis failed. Check the backend connection.");
     }
   };
 
@@ -151,7 +152,7 @@ export default function UploadPanel() {
         )}
 
         {analysisStatus === "error" && (
-          <p className="upload-error">Analysis failed. Check backend logs.</p>
+          <p className="upload-error">{message || "Analysis failed. Check the backend connection."}</p>
         )}
 
         <AnalysisResultPanel report={analysisReport} />

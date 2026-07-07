@@ -53,3 +53,37 @@ Frontend: http://localhost:5173
 ## Notes for diploma defense
 
 Use `backend/sample_projects/vulnerable_python_app` as the main demo input. It contains intentional issues so agents can detect security and quality problems.
+
+## Production Deployment
+
+TestPilot AI is ready for a split deployment with the backend on Render and the frontend on Vercel.
+
+### Render Backend
+
+- Root directory: `backend`
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Health check path: `/health`
+
+Required environment variables:
+
+```bash
+LOG_LEVEL=INFO
+CORS_ORIGINS=https://your-vercel-app.vercel.app
+```
+
+### Vercel Frontend
+
+- Root directory: `frontend`
+- Build command: `npm run build`
+- Output directory: `dist`
+
+Required environment variable:
+
+```bash
+VITE_API_BASE_URL=https://your-render-service.onrender.com
+```
+
+For local development, the frontend falls back to `http://127.0.0.1:8000`, and the backend allows `localhost:5173` / `127.0.0.1:5173` by default.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment checklist.

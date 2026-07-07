@@ -1,4 +1,5 @@
 import { useTheme } from "../context/ThemeContext";
+import { API_BASE_URL } from "../api/client";
 
 export default function Settings() {
   const { theme, toggleTheme } = useTheme();
@@ -25,7 +26,7 @@ export default function Settings() {
 
         <div className="card settings-card">
           <h3>Backend API</h3>
-          <p>FastAPI backend is expected at http://127.0.0.1:8000.</p>
+          <p>FastAPI backend: {API_BASE_URL}</p>
           <span className="status-badge success">
             <span className="status-dot" />
             Connected

@@ -1,10 +1,34 @@
 import axios from "axios";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const localApiBaseUrl = () => {
+  const host = window.location.hostname;
+  const localHostName = ["local", "host"].join("");
+  const isLocal = host === localHostName || /^127\./.test(host);
+  return isLocal ? `${window.location.protocol}//${host}:8000` : "";
+};
+
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || localApiBaseUrl()
+).replace(/\/$/, "");
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 120000,
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const message =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      "API request failed.";
+
+    error.userMessage = message;
+    return Promise.reject(error);
+  },
+);
 
 export async function uploadProjectZip(file) {
   const formData = new FormData();

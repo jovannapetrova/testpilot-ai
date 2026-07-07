@@ -23,3 +23,19 @@ backend/storage/reports/*
 # IDE
 .idea/
 .vscode/
+# Uploaded repositories
+backend/uploads/
+
+# Python
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.local

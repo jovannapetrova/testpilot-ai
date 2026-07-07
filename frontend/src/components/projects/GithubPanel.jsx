@@ -88,10 +88,10 @@ export default function GithubPanel() {
           setMessage(data.error || "Analysis failed.");
           setCurrentAgent("Failed");
         }
-      } catch {
+      } catch (error) {
         clearInterval(timer);
         setStatus("error");
-        setMessage("Progress tracking failed.");
+        setMessage(error.userMessage || "Progress tracking failed.");
       }
     }, 900);
   };
@@ -128,7 +128,7 @@ export default function GithubPanel() {
       pollProgress(result.project_id, result.project_name);
     } catch (error) {
       setStatus("error");
-      setMessage(error.response?.data?.detail || "GitHub analysis failed.");
+      setMessage(error.userMessage || "GitHub analysis failed.");
       setCurrentAgent("Failed");
     }
   };

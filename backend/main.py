@@ -1,10 +1,13 @@
 from pathlib import Path
+import logging
+import os
 import shutil
 import uuid
 import zipfile
 import csv
 from io import StringIO
 
+import uvicorn
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
@@ -25,15 +28,36 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("testpilot")
+
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 app = FastAPI(title="TestPilot AI API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials="*" not in CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def log_startup():
+    logger.info("TestPilot AI API starting with CORS origins: %s", CORS_ORIGINS)
 
 
 def detect_language(files):
@@ -69,6 +93,7 @@ def run_github_analysis_background(project_id: str, url: str):
         save_analysis_report(report)
 
     except Exception as exc:
+        logger.exception("GitHub analysis failed for project %s", project_id)
         fail_analysis(project_id, str(exc))
 
 
@@ -77,6 +102,15 @@ def health_check():
     return {
         "status": "online",
         "service": "TestPilot AI Backend",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+        "service": "testpilot-ai-backend",
+        "version": app.version,
     }
 
 
@@ -442,3 +476,8 @@ def clear_reports():
         "success": True,
         "message": "All reports cleared successfully.",
     }
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
