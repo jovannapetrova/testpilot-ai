@@ -1,0 +1,122 @@
+.upload-panel {
+  min-height: 100%;
+}
+
+.upload-area,
+.github-form {
+  display: grid;
+  gap: 16px;
+  justify-items: start;
+}
+
+.upload-area > svg,
+.github-form > svg {
+  color: var(--primary);
+  padding: 10px;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.upload-area h3 {
+  margin-bottom: 0;
+}
+
+.upload-area p,
+.github-form p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.upload-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.github-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: #ffffff;
+  color: var(--text);
+  outline: 0;
+}
+
+.github-form input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.upload-summary {
+  margin-top: 4px;
+}
+
+.analyze-btn {
+  margin-top: 4px;
+}
+
+.upload-error {
+  color: var(--red);
+  font-weight: 800;
+}
+
+.analysis-progress {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.progress-header span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.progress-track {
+  height: 10px;
+  margin: 14px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), #38bdf8);
+  transition: width 0.25s ease;
+}
+
+.progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.project-card-button {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-card-button:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.25);
+  border-radius: var(--radius);
+}
+
+@media (max-width: 760px) {
+  .upload-actions,
+  .progress-meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

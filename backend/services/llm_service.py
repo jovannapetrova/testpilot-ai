@@ -1,0 +1,61 @@
+from __future__ import annotations
+import os
+
+class LLMService:
+    """
+    Free-first LLM service.
+    Default provider is 'mock' so the application works without paid APIs.
+    Later you can replace this with Groq/OpenAI/Ollama without changing agents.
+    """
+    def __init__(self):
+        self.provider = os.getenv("LLM_PROVIDER", "mock").lower()
+
+    def generate_test_suggestions(self, file_path: str, code: str, functions: list[str]) -> str:
+        if self.provider == "mock":
+            return self._mock_tests(file_path, functions)
+        return self._mock_tests(file_path, functions)
+
+    def generate_recommendations(self, context: dict) -> list[dict]:
+        recs = []
+        if context.get("security_count", 0) > 0:
+            recs.append({
+                "title": "Resolve security findings",
+                "priority": "high",
+                "description": "The security agent detected vulnerabilities or unsafe patterns.",
+                "suggested_action": "Review all high and medium severity findings and replace unsafe code with validated, parameterized, or sanitized implementations."
+            })
+        if context.get("coverage", 0) < 70:
+            recs.append({
+                "title": "Increase test coverage",
+                "priority": "medium",
+                "description": "Coverage is below the recommended threshold for maintainable software.",
+                "suggested_action": "Add unit tests for edge cases, validation logic, and error handling paths."
+            })
+        if context.get("complexity", 0) > 10:
+            recs.append({
+                "title": "Reduce code complexity",
+                "priority": "medium",
+                "description": "Some functions are complex and harder to maintain.",
+                "suggested_action": "Split large functions into smaller functions and reduce nested conditional logic."
+            })
+        if not recs:
+            recs.append({
+                "title": "Maintain current quality level",
+                "priority": "low",
+                "description": "No critical issues were detected by the current analysis.",
+                "suggested_action": "Keep adding tests and run TestPilot AI regularly before releases."
+            })
+        return recs
+
+    def _mock_tests(self, file_path: str, functions: list[str]) -> str:
+        lines = ["import pytest", ""]
+        if not functions:
+            lines.append("def test_module_imports():")
+            lines.append("    assert True")
+            return "\n".join(lines)
+        for fn in functions[:5]:
+            lines.append(f"def test_{fn}_basic_behavior():")
+            lines.append(f"    # TODO: Replace with concrete assertions for {fn}()")
+            lines.append("    assert True")
+            lines.append("")
+        return "\n".join(lines)

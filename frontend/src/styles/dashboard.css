@@ -1,0 +1,146 @@
+.metrics-section {
+  margin: 20px 0;
+}
+
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.dashboard-hero {
+  padding: 28px;
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  align-items: center;
+  border-radius: var(--radius-lg);
+}
+
+.dashboard-hero h2 {
+  margin: 0 0 10px;
+  font-size: 32px;
+}
+
+.dashboard-hero p {
+  max-width: 760px;
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.score-orb {
+  flex: 0 0 auto;
+  min-width: 170px;
+  padding: 22px;
+  border-radius: var(--radius);
+  text-align: left;
+  background: #0b1220;
+  color: #ffffff;
+}
+
+.score-orb span,
+.score-orb small {
+  display: block;
+  color: #aab4c4;
+  font-weight: 800;
+}
+
+.score-orb strong {
+  display: block;
+  margin: 8px 0;
+  font-size: 46px;
+  line-height: 1;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.dashboard-grid.bottom {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.project-row {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+}
+
+.project-row h3 {
+  margin: 0 0 5px;
+}
+
+.project-row p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.project-meta {
+  text-align: right;
+}
+
+.project-meta strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 24px;
+}
+
+.insight-card {
+  min-height: 150px;
+}
+
+.insight-card h3 {
+  margin: 0 0 8px;
+}
+
+.dashboard-refresh-row {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dashboard-refresh-row span,
+.trend-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.trend-note {
+  display: inline-block;
+  margin-top: 8px;
+  font-weight: 800;
+}
+
+@media (max-width: 1100px) {
+  .grid-4,
+  .dashboard-grid,
+  .dashboard-grid.bottom {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dashboard-hero {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .grid-4,
+  .dashboard-grid,
+  .dashboard-grid.bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hero {
+    flex-direction: column;
+  }
+
+  .score-orb {
+    width: 100%;
+  }
+}

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.env.local
+
+# Storage
+backend/storage/uploads/*
+backend/storage/workspaces/*
+backend/storage/reports/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/workspaces/.gitkeep
+!backend/storage/reports/.gitkeep
+
+# IDE
+.idea/
+.vscode/
