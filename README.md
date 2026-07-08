@@ -85,7 +85,7 @@ ENABLE_TEST_EXECUTION=false
 Required environment variable:
 
 ```bash
-VITE_API_BASE_URL=https://your-render-service.onrender.com
+VITE_API_BASE_URL=https://testpilotai-9av1.onrender.com
 ```
 
 For local development, the frontend falls back to `http://127.0.0.1:8000`, and the backend allows `localhost:5173` / `127.0.0.1:5173` by default.
