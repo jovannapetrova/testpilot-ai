@@ -19,10 +19,10 @@ class LLMService:
         recs = []
         if context.get("security_count", 0) > 0:
             recs.append({
-                "title": "Resolve security findings",
+                "title": "Resolve confirmed high-confidence security findings",
                 "priority": "high",
-                "description": "The security agent detected vulnerabilities or unsafe patterns.",
-                "suggested_action": "Review all high and medium severity findings and replace unsafe code with validated, parameterized, or sanitized implementations."
+                "description": "The security agent detected high-confidence production security candidates.",
+                "suggested_action": "Validate exploitability, apply the finding-specific remediation, rotate confirmed exposed credentials, and add regression tests."
             })
         if context.get("coverage", 0) < 70:
             recs.append({

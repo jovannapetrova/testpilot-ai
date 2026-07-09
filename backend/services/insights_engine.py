@@ -23,8 +23,25 @@ def build_ai_insights(report_data: dict) -> dict:
     generated_tests = report_data.get("generated_tests", [])
     coverage = report_data.get("coverage", {}) or {}
 
+    real_security_findings = [
+        finding for finding in security_findings
+        if finding.get("category") == "real_secret_candidate"
+        or str(finding.get("severity", "")).lower().split(".")[-1] in {"high", "critical"}
+    ]
+    low_confidence_secret_refs = [
+        finding for finding in security_findings
+        if finding.get("category") in {
+            "placeholder_secret",
+            "secret_reference",
+            "test_fixture_secret",
+            "ci_secret_reference",
+            "runtime_secret_reference",
+            "auth_parameter",
+        }
+    ]
+
     priority_actions = []
-    if scores["Security"] < 80 or security_findings:
+    if scores["Security"] < 80 and real_security_findings:
         priority_actions.append({
             "priority": "high",
             "what": "Triage production-context security findings first.",
@@ -33,6 +50,16 @@ def build_ai_insights(report_data: dict) -> dict:
             "how_to_fix": "Group by fingerprint, validate exploitability, remediate secrets/injection/network issues, and add regression tests.",
             "estimated_effort": "medium",
             "business_impact": "High risk reduction for release readiness.",
+        })
+    elif low_confidence_secret_refs:
+        priority_actions.append({
+            "priority": "low",
+            "what": "Validate low-confidence secret references.",
+            "why": "The findings look like placeholders, CI/config references, runtime properties, or fixture values rather than leaked live secrets.",
+            "impact": "Reduces audit noise and confirms deployment hygiene.",
+            "how_to_fix": "Confirm references resolve through managed secrets, avoid logging resolved values, and keep examples obviously fake.",
+            "estimated_effort": "small",
+            "business_impact": "Improves confidence without creating unnecessary incident work.",
         })
     if scores["Testing"] < 70:
         priority_actions.append({

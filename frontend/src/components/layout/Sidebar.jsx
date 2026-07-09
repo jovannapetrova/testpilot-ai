@@ -6,17 +6,13 @@ import {
   FileText,
   Settings,
   ShieldCheck,
-  GitBranch,
-  GitCompare,
   UserCircle,
 } from "lucide-react";
 
 const links = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/projects", label: "Projects", icon: FolderGit2 },
-  { to: "/github", label: "GitHub Analysis", icon: GitBranch },
   { to: "/reports", label: "Reports", icon: FileText },
-  { to: "/comparison", label: "Comparison", icon: GitCompare },
   { to: "/agents", label: "AI Agents", icon: Bot },
   { to: "/profile", label: "Profile", icon: UserCircle },
   { to: "/settings", label: "Settings", icon: Settings },

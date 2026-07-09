@@ -23,25 +23,12 @@ export default function SecurityFindingsList({ findings = [] }) {
     return Array.from(map.values());
   }, [findings]);
 
-  const lowCount = findings.filter((f) => f.severity === "low").length;
-  const mediumCount = findings.filter((f) => f.severity === "medium").length;
-  const highCount = findings.filter((f) => f.severity === "high").length;
-  const criticalCount = findings.filter((f) => f.severity === "critical").length;
-
   if (!findings.length) {
     return <p className="muted-text">No security findings detected.</p>;
   }
 
   return (
     <div className="detail-list">
-      <div className="security-summary">
-        <div><span>Critical</span><strong>{criticalCount}</strong></div>
-        <div><span>High</span><strong>{highCount}</strong></div>
-        <div><span>Medium</span><strong>{mediumCount}</strong></div>
-        <div><span>Low-risk</span><strong>{lowCount}</strong></div>
-        <div><span>Grouped issues</span><strong>{groupedFindings.length}</strong></div>
-      </div>
-
       {groupedFindings.map((item, index) => (
         <div className="detail-row" key={`${item.fingerprint || item.file}-${index}`}>
           <div>

@@ -1177,6 +1177,19 @@ class TestGeneratorAgent:
                     "  });",
                 ])
                 emitted += 1
+            elif name.lower() in {"createstore", "legacy_createstore"}:
+                lines.extend([
+                    "",
+                    f"  test('{safe} creates a store that dispatches reducer updates', () => {{",
+                    f"    const createStore = targetModule['{name}'] || targetModule.default;",
+                    "    const reducer = (state = { count: 0 }, action) => action.type === 'inc' ? { count: state.count + 1 } : state;",
+                    "    const store = createStore(reducer);",
+                    "    expect(store.getState()).toEqual({ count: 0 });",
+                    "    store.dispatch({ type: 'inc' });",
+                    "    expect(store.getState()).toEqual({ count: 1 });",
+                    "  });",
+                ])
+                emitted += 1
 
         for item in info.pure_exports[:8]:
             name = item["name"]
@@ -1859,6 +1872,7 @@ class TestGeneratorAgent:
         low_value = [
             "tests/", "/tests/", "test/", "/test/", "test_", "docs/", "docs_src/",
             "examples/", "example/", "tutorial/", ".github/", "scripts/", "demo/",
+            "website/", "site/", "www/",
         ]
         for token in production_boosts:
             if token in value:
@@ -1880,7 +1894,7 @@ class TestGeneratorAgent:
         return any(token in value for token in [
             "node_modules/", "venv/", ".venv/", "__pycache__/", "dist/",
             "build/", ".git/", "docs/", "docs_src/", "examples/", "example/",
-            "tutorial/", "sample_projects/", "uploads/", "storage/", "target/",
+            "tutorial/", "website/", "site/", "www/", "sample_projects/", "uploads/", "storage/", "target/",
             ".mvn/", ".gradle/",
         ])
 

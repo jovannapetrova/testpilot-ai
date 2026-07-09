@@ -36,10 +36,22 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const config = error.config || {};
+    const status = error.response?.status;
+    const method = String(config.method || "get").toLowerCase();
+    const canRetry = method === "get" && !config._retryOnce && (!status || status >= 500);
+
+    if (canRetry) {
+      config._retryOnce = true;
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      return api(config);
+    }
+
     const message =
       error.response?.data?.detail ||
       error.response?.data?.message ||
+      (status === 404 ? "The requested item could not be found. It may have been deleted or moved." : "") ||
       error.message ||
       "API request failed.";
 

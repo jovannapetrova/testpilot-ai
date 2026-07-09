@@ -19,7 +19,7 @@ function formatSeconds(value) {
   return `${minutes}m ${seconds}s`;
 }
 
-export default function GithubPanel() {
+export default function GithubPanel({ onAnalysisComplete }) {
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
@@ -80,6 +80,7 @@ export default function GithubPanel() {
           setCurrentAgent("Completed");
           setLogs(finalReport?.agent_logs || []);
           setSummary(buildSummaryFromReport(projectId, projectName, finalReport));
+          onAnalysisComplete?.();
         }
 
         if (data.status === "failed") {

@@ -92,8 +92,8 @@
   display: grid;
   place-items: center;
   cursor: pointer;
-  color: #344054;
-  background: #ffffff;
+  color: var(--text);
+  background: var(--panel);
   border: 1px solid var(--line);
 }
 
@@ -124,7 +124,7 @@
 .compare-controls select {
   min-height: 42px;
   border: 1px solid var(--line-strong);
-  background: #ffffff;
+  background: var(--panel);
   color: var(--text);
   border-radius: 10px;
   padding: 0 12px;

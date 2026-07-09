@@ -35,7 +35,7 @@ export default function QualityMetricsList({ metrics = [], metadata = {} }) {
             ) : null}
             {evidence.slice(0, 3).map((issue) => (
               <p key={`${issue.type}-${issue.start_line}-${issue.end_line}`}>
-                {(issue.issue_type || issue.type)} lines {issue.start_line}-{issue.end_line}
+                {(issue.issue_type || issue.type)} {issue.start_line && issue.end_line ? `lines ${issue.start_line}-${issue.end_line}` : "line unknown"}
                 {issue.symbol ? ` (${issue.symbol})` : ""}: {issue.remediation}
               </p>
             ))}

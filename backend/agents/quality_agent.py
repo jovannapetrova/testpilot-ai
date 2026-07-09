@@ -197,6 +197,7 @@ class QualityAgent:
             return
 
         assigned = set()
+        assigned_lines = {}
         used = set()
 
         for node in ast.walk(tree):
@@ -231,14 +232,26 @@ class QualityAgent:
             elif isinstance(node, ast.Name):
                 if isinstance(node.ctx, ast.Store):
                     assigned.add(node.id)
+                    assigned_lines.setdefault(node.id, getattr(node, "lineno", 0) or 0)
                 elif isinstance(node.ctx, ast.Load):
                     used.add(node.id)
 
         dead = sorted(name for name in assigned - used if not name.startswith("_"))[:8]
         metric.dead_code_indicators += len(dead)
         for name in dead:
+            line_number = assigned_lines.get(name)
             metric.smells.append(f"Potential unused local or symbol: {name}")
-            self._add_quality_issue(metric, "dead_code_indicator", 1, 1, f"Assigned symbol {name} was not observed as used in the same module.", "Unused symbols add maintenance cost and may hide incomplete changes.", "Verify dynamically referenced names before removal.", "small", "minor")
+            self._add_quality_issue(
+                metric,
+                "dead_code_indicator",
+                line_number,
+                line_number,
+                f"Assigned symbol {name} was not observed as used in the same module.",
+                "Unused symbols add maintenance cost and may hide incomplete changes.",
+                "Verify dynamically referenced names before removal.",
+                "small",
+                "minor",
+            )
 
         self._apply_text_smells(metric, text, language="python")
         self._quality_recommendations(metric)
@@ -349,6 +362,7 @@ class QualityAgent:
 
         windows: dict[str, tuple[int, int]] = {}
         details: list[dict[str, int | str]] = []
+        emitted_ranges: list[tuple[int, int]] = []
         for index in range(max(0, len(normalized_lines) - 5)):
             block_lines = normalized_lines[index:index + 6]
             block = "\n".join(item[1] for item in block_lines)
@@ -356,6 +370,10 @@ class QualityAgent:
             end = block_lines[-1][0]
             if block in windows:
                 first_start, first_end = windows[block]
+                if start <= first_end + 2:
+                    continue
+                if any(abs(start - emitted_start) <= 2 and abs(end - emitted_end) <= 2 for emitted_start, emitted_end in emitted_ranges):
+                    continue
                 details.append({
                     "file": file_name,
                     "first_start": first_start,
@@ -363,6 +381,7 @@ class QualityAgent:
                     "second_start": start,
                     "second_end": end,
                 })
+                emitted_ranges.append((start, end))
             else:
                 windows[block] = (start, end)
         return details[:20]
@@ -391,8 +410,8 @@ class QualityAgent:
             "type": issue_type,
             "file": metric.file,
             "symbol": self._issue_symbol(evidence),
-            "start_line": max(1, int(start or 1)),
-            "end_line": max(1, int(end or start or 1)),
+            "start_line": int(start) if start else None,
+            "end_line": int(end) if end else None,
             "evidence": evidence,
             "why_it_matters": why,
             "why": why,

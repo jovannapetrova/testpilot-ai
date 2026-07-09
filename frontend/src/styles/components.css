@@ -64,7 +64,7 @@
   display: grid;
   place-items: center;
   color: var(--primary);
-  background: #eff6ff;
+  background: color-mix(in srgb, var(--primary) 14%, var(--panel));
 }
 
 .metric-bottom {
@@ -192,7 +192,7 @@
   display: grid;
   place-items: center;
   color: var(--primary);
-  background: #eff6ff;
+  background: color-mix(in srgb, var(--primary) 14%, var(--panel));
   font-size: 12px;
   font-weight: 900;
 }
@@ -214,7 +214,7 @@
   padding: 22px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--line);
-  background: #ffffff;
+  background: var(--panel);
   box-shadow: var(--shadow);
 }
 
@@ -302,7 +302,7 @@
   margin-bottom: 12px;
   padding: 4px;
   width: fit-content;
-  background: #eef2f7;
+  background: var(--panel-strong);
   border-radius: 12px;
 }
 
@@ -318,7 +318,7 @@
 
 .tab-btn.active {
   color: var(--text);
-  background: #ffffff;
+  background: var(--panel);
   box-shadow: var(--shadow-soft);
 }
 
@@ -328,7 +328,7 @@
   padding: 16px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
-  background: #ffffff;
+  background: var(--panel);
 }
 
 .tab-summary-grid {
@@ -442,8 +442,8 @@
   border-radius: 8px;
   cursor: pointer;
   color: var(--primary);
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: color-mix(in srgb, var(--primary) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
   font-size: 12px;
   font-weight: 800;
 }
@@ -460,7 +460,7 @@
   padding: 12px;
   border-radius: 10px;
   color: var(--muted);
-  background: #eef2f7;
+  background: var(--panel-strong);
   border: 1px dashed var(--line-strong);
   font-size: 13px;
   font-weight: 700;

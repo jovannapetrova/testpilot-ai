@@ -101,7 +101,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(245, 247, 251, 0.9);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(16px);
 }
@@ -129,7 +129,7 @@
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: #ffffff;
+  background: var(--panel);
   color: var(--muted);
 }
 
@@ -148,8 +148,8 @@
   display: grid;
   place-items: center;
   cursor: pointer;
-  color: #344054;
-  background: #ffffff;
+  color: var(--text);
+  background: var(--panel);
   border: 1px solid var(--line);
 }
 

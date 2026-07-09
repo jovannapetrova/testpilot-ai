@@ -14,7 +14,7 @@
   color: var(--primary);
   padding: 10px;
   border-radius: 14px;
-  background: #eff6ff;
+  background: color-mix(in srgb, var(--primary) 14%, var(--panel));
 }
 
 .upload-area h3 {
@@ -39,7 +39,7 @@
   padding: 0 14px;
   border-radius: 10px;
   border: 1px solid var(--line-strong);
-  background: #ffffff;
+  background: var(--panel);
   color: var(--text);
   outline: 0;
 }
@@ -81,7 +81,70 @@
   margin: 14px 0;
   overflow: hidden;
   border-radius: 999px;
-  background: #e5e7eb;
+  background: var(--line);
+}
+
+.source-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.source-tab {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.source-tab.active {
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.single-workflow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.project-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.project-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+}
+
+.error-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  color: var(--red);
 }
 
 .progress-fill {

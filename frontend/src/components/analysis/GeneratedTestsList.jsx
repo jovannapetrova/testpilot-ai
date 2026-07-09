@@ -3,7 +3,6 @@ import { useState } from "react";
 export default function GeneratedTestsList({ tests = [], metadata = {} }) {
   const humanDesign = metadata.needs_human_test_design || [];
   const skippedReasons = metadata.skipped_generation_reasons || {};
-  const categories = metadata.by_category || {};
   const [expanded, setExpanded] = useState({});
 
   if (!tests.length && !humanDesign.length) {
@@ -12,21 +11,6 @@ export default function GeneratedTestsList({ tests = [], metadata = {} }) {
 
   return (
     <div className="detail-list">
-      <div className="security-summary">
-        <div><span>Executable</span><strong>{metadata.executable_tests ?? tests.length}</strong></div>
-        <div><span>Smoke</span><strong>{metadata.smoke_tests ?? 0}</strong></div>
-        <div><span>Needs design</span><strong>{humanDesign.length}</strong></div>
-      </div>
-
-      {Object.keys(categories).length ? (
-        <div className="detail-row">
-          <div>
-            <strong>Generated test categories</strong>
-            <p>{Object.entries(categories).map(([name, count]) => `${name}: ${count}`).join(" | ")}</p>
-          </div>
-        </div>
-      ) : null}
-
       {tests.slice(0, 5).map((test, index) => (
         <div className="test-row" key={`${test.file}-${index}`}>
           <div className="test-row-header">

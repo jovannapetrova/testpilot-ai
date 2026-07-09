@@ -153,37 +153,38 @@ class SecurityAgent:
                 match = assignment_pattern.search(clean)
                 is_private_key = bool(private_key_pattern.search(clean))
                 if match or is_private_key:
+                    key = match.group("key") if match else "private_key"
                     value = match.group("value") if match else clean
-                    placeholder = self._looks_like_placeholder(value, clean)
                     context = self._classify_context(rel_file)
-                    confidence = self._secret_confidence(value, clean, context, placeholder)
-                    severity = self._adjust_severity_for_context(
-                        file_path=rel_file,
-                        issue="Potential hardcoded secret",
-                        severity=self._secret_severity(context, confidence, placeholder),
+                    taxonomy = self._secret_taxonomy(
+                        key=key,
+                        value=value,
+                        line=clean,
+                        context=context,
+                        is_private_key=is_private_key,
                     )
+
+                    if taxonomy["skip"]:
+                        continue
 
                     findings.append(
                         SecurityFinding(
                             file=rel_file,
                             line=idx,
-                            severity=severity,
+                            severity=taxonomy["severity"],
                             context=context,
-                            issue="Potential hardcoded secret",
+                            issue=taxonomy["issue"],
                             description=self._contextual_description(
                                 context,
-                                "A possible secret, token, API key, or password "
-                                "was detected. Severity is adjusted according "
-                                "to whether it appears in production, tests, docs, "
-                                "examples, CI, Docker, or Kubernetes configuration."
+                                taxonomy["description"],
                             ),
-                            confidence=confidence,
-                            fingerprint=self._fingerprint(rel_file, "Potential hardcoded secret", context),
-                            remediation=self._remediation_for_issue("Potential hardcoded secret"),
+                            confidence=taxonomy["confidence"],
+                            fingerprint=self._fingerprint(rel_file, taxonomy["category"], context),
+                            remediation=taxonomy["remediation"],
                             evidence=self._redact_evidence(clean)[:240],
-                            category="secret-placeholder" if placeholder else "secrets",
-                            impact=self._impact_for_issue("Potential hardcoded secret", context),
-                            false_positive_likelihood="high" if placeholder else self._false_positive_likelihood(context, confidence),
+                            category=taxonomy["category"],
+                            impact=taxonomy["impact"],
+                            false_positive_likelihood=taxonomy["false_positive_likelihood"],
                             affected_files=[rel_file],
                         )
                     )
@@ -503,10 +504,186 @@ class SecurityAgent:
         placeholders = [
             "example", "sample", "dummy", "placeholder", "changeme", "change_me",
             "your_", "xxx", "todo", "test", "fake", "redacted", "<", ">",
-            "${", "process.env", "os.environ", "env.", "password", "username",
-            "localhost", "127.0.0.1", "secret", "token", "apikey", "api_key",
+            "${", "process.env", "os.environ", "env.", "username",
+            "localhost", "127.0.0.1",
         ]
         return any(token in lowered for token in placeholders) or value.strip() in {"", "''", '""', "none", "null"}
+
+    def _secret_taxonomy(
+        self,
+        key: str,
+        value: str,
+        line: str,
+        context: str,
+        is_private_key: bool = False,
+    ) -> dict:
+        normalized_value = str(value or "").strip().strip("'\"")
+        lowered_line = line.lower()
+        placeholder = self._looks_like_placeholder(normalized_value, line)
+        known_prefix = bool(re.search(r"\b(ghp_|github_pat_|sk-|xox[baprs]-|AKIA|AIza|ya29\.)", normalized_value))
+        entropyish = (
+            len(normalized_value) >= 20
+            and self._entropy(normalized_value) >= 3.2
+            and bool(re.search(r"[A-Za-z]", normalized_value))
+            and bool(re.search(r"\d", normalized_value))
+        )
+
+        if self._is_auth_parameter_reference(key, normalized_value, line):
+            if not self._auth_parameter_has_literal_default(key, line):
+                return {"skip": True}
+            return self._secret_taxonomy_payload(
+                "auth_parameter",
+                "Default credential value on authentication parameter",
+                FindingSeverity.medium,
+                "medium",
+                "medium",
+                "A credential-like function parameter has a literal default value.",
+                "Remove literal credential defaults from signatures and inject values from configuration or tests.",
+                "Literal defaults on authentication parameters may accidentally become reusable credentials.",
+            )
+
+        if known_prefix or entropyish or is_private_key:
+            severity = FindingSeverity.high if context == "production" else FindingSeverity.low
+            confidence = "high" if context == "production" else "medium"
+            false_positive = "low" if context == "production" else "medium"
+            return self._secret_taxonomy_payload(
+                "real_secret_candidate",
+                "Real secret candidate",
+                severity,
+                confidence,
+                false_positive,
+                "A high-entropy or known-format credential-like literal was detected.",
+                "Rotate the value if it is live, move it to a managed secret store, and add secret scanning to CI.",
+                "A real exposed credential may allow unauthorized access.",
+            )
+
+        if self._is_ci_secret_reference(normalized_value, line, context):
+            return self._secret_taxonomy_payload(
+                "ci_secret_reference",
+                "CI secret reference",
+                FindingSeverity.low,
+                "low",
+                "low" if known_prefix else "high",
+                "A CI or workflow secret reference was detected. References are expected and are not leaked values unless a real token is present.",
+                "Confirm the workflow references managed secrets and does not echo them into logs.",
+                "CI references are normally safe, but should be validated for accidental exposure.",
+            )
+
+        if self._is_secret_reference(normalized_value, line):
+            return self._secret_taxonomy_payload(
+                "secret_reference",
+                "Configuration secret reference",
+                FindingSeverity.low,
+                "low",
+                "high",
+                "An environment/configuration secret reference was detected, not a literal secret value.",
+                "Validate that the referenced secret is supplied by the deployment environment or secret manager.",
+                "References are low risk unless they resolve to exposed values in logs or generated files.",
+            )
+
+        if self._is_runtime_secret_reference(normalized_value, line):
+            return self._secret_taxonomy_payload(
+                "runtime_secret_reference",
+                "Runtime secret property reference",
+                FindingSeverity.low,
+                "low",
+                "high",
+                "A runtime property or variable reference was detected, not a hardcoded literal.",
+                "Verify access controls around the runtime secret source rather than rotating credentials.",
+                "Runtime references usually indicate secret usage, not secret leakage.",
+            )
+
+        if context in {"test", "example", "docs", "api_example"} and not (known_prefix or entropyish or is_private_key):
+            return self._secret_taxonomy_payload(
+                "test_fixture_secret",
+                "Test/example fixture secret",
+                FindingSeverity.low,
+                "low",
+                "high",
+                "A credential-like value appears in test/example material and looks like fixture data.",
+                "Keep fixture secrets obviously fake and prevent them from being reused in production.",
+                "Fixture values are usually low impact unless they match live credentials.",
+            )
+
+        if placeholder:
+            return self._secret_taxonomy_payload(
+                "placeholder_secret",
+                "Placeholder secret value",
+                FindingSeverity.low,
+                "low",
+                "high",
+                "A placeholder or template secret value was detected.",
+                "Ensure placeholders are replaced by managed secrets during deployment and never committed with real values.",
+                "Placeholders are low risk but can hide missing production configuration.",
+            )
+
+        return self._secret_taxonomy_payload(
+            "placeholder_secret",
+            "Low-confidence credential-like value",
+            FindingSeverity.low,
+            "low",
+            "high",
+            "A low-confidence credential-like literal was detected.",
+            "Review the value and either remove it, mark it as a fixture, or move real credentials to managed secrets.",
+            "Low-confidence values rarely indicate direct exposure but should be checked.",
+        )
+
+    def _secret_taxonomy_payload(
+        self,
+        category: str,
+        issue: str,
+        severity: FindingSeverity,
+        confidence: str,
+        false_positive_likelihood: str,
+        description: str,
+        remediation: str,
+        impact: str,
+    ) -> dict:
+        return {
+            "skip": False,
+            "category": category,
+            "issue": issue,
+            "severity": severity,
+            "confidence": confidence,
+            "false_positive_likelihood": false_positive_likelihood,
+            "description": description,
+            "remediation": remediation,
+            "impact": impact,
+        }
+
+    def _is_auth_parameter_reference(self, key: str, value: str, line: str) -> bool:
+        key_lower = str(key or "").lower()
+        if key_lower not in {"password", "token", "secret", "api_key", "apikey", "access_token"}:
+            return False
+        if re.search(r"\b(def|function)\b[^{;]*\([^)]*" + re.escape(key) + r"\s*[:=]", line, flags=re.IGNORECASE):
+            return True
+        if re.search(r"\([^)]*" + re.escape(key) + r"\s*:\s*[A-Za-z_$]", line):
+            return True
+        return value.lower() in {"str", "string", "bytes", "none", "null", "undefined"}
+
+    def _auth_parameter_has_literal_default(self, key: str, line: str) -> bool:
+        pattern = re.escape(key) + r"\s*(?::\s*[^=,)]+)?=\s*['\"][^'\"]+['\"]"
+        return bool(re.search(pattern, line, flags=re.IGNORECASE))
+
+    def _is_ci_secret_reference(self, value: str, line: str, context: str) -> bool:
+        lowered = f"{value} {line}".lower()
+        return context == "ci" or "secrets." in lowered or "github.token" in lowered or "github_token" in lowered
+
+    def _is_secret_reference(self, value: str, line: str) -> bool:
+        lowered = f"{value} {line}".lower()
+        return any(
+            token in lowered
+            for token in [
+                "${", "%{", "{{", "process.env", "os.environ", "system.getenv",
+                "getenv(", "env.", "environment.", "config.get", "settings.",
+            ]
+        )
+
+    def _is_runtime_secret_reference(self, value: str, line: str) -> bool:
+        lowered = f"{value} {line}".lower()
+        if re.match(r"^(this|self|config|settings|options|opts|req|request|ctx|context|credentials)\.", lowered):
+            return True
+        return bool(re.search(r"=\s*(this|self|config|settings|options|credentials)\.[A-Za-z0-9_.]+", lowered))
 
     def _secret_confidence(self, value: str, line: str, context: str, placeholder: bool) -> str:
         known_prefix = bool(re.search(r"\b(ghp_|github_pat_|sk-|xox[baprs]-|AKIA|AIza|ya29\.)", value))

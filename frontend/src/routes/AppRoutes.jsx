@@ -37,10 +37,8 @@ export default function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/projects" element={<Projects />} />
-        <Route path="/github" element={<Projects />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/reports" element={<Reports />} />
-        <Route path="/comparison" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/profile" element={<Profile />} />
       </Route>

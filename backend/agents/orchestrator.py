@@ -132,6 +132,10 @@ class AgentOrchestrator:
                     len(security_findings),
                     coverage.coverage_percent,
                     avg_complexity,
+                    security_findings=security_findings,
+                    quality_metrics=quality_metrics,
+                    coverage_result=coverage,
+                    generation_metadata=test_generation_metadata,
                 ),
             )
 
@@ -286,13 +290,15 @@ class AgentOrchestrator:
             severity = normalize_severity(getattr(finding, "severity", "medium"))
             file_path = normalize_file(getattr(finding, "file", ""))
             issue = str(getattr(finding, "issue", ""))
+            category = str(getattr(finding, "category", "") or "").lower()
+            confidence = str(getattr(finding, "confidence", "") or "").lower()
 
-            key = (issue, severity, file_path)
+            key = (issue, severity, file_path, category, confidence)
             grouped[key] = grouped.get(key, 0) + 1
 
         penalty = 0.0
 
-        for (issue, severity, file_path), count in grouped.items():
+        for (issue, severity, file_path, category, confidence), count in grouped.items():
             base_weight = weights.get(severity, 1.5)
             issue_lower = issue.lower()
 
@@ -302,13 +308,26 @@ class AgentOrchestrator:
             is_ci = any(x in file_path for x in [".github/", "workflows/", ".gitlab-ci"])
             is_container = any(x in file_path for x in ["docker-compose", "dockerfile", "k8s/", "kubernetes/", "helm/"])
 
-            if "hardcoded secret" in issue_lower:
+            if category in {
+                "placeholder_secret",
+                "secret_reference",
+                "auth_parameter",
+                "test_fixture_secret",
+                "ci_secret_reference",
+                "runtime_secret_reference",
+            }:
+                base_weight *= 0.04
+
+            elif category == "real_secret_candidate":
                 if is_test or is_docs or is_example or is_ci:
-                    base_weight *= 0.08
+                    base_weight *= 0.15
                 elif is_container:
-                    base_weight *= 0.35
+                    base_weight *= 0.45
                 else:
-                    base_weight *= 0.55
+                    base_weight *= 1.0
+
+            elif "hardcoded secret" in issue_lower:
+                base_weight *= 0.12
 
             elif "request_without_timeout" in issue_lower:
                 if is_test or is_docs or is_example:
@@ -418,10 +437,26 @@ class AgentOrchestrator:
                     "complexity": metric.complexity,
                 })
 
+        def context_rank(context: str) -> int:
+            return {
+                "production": 0,
+                "config": 1,
+                "ci": 2,
+                "test": 3,
+                "example": 4,
+                "docs": 5,
+            }.get(str(context or "production").lower(), 6)
+
         return {
             "smells": smells,
             "recommendations": recommendations[:8],
-            "hotspots": sorted(hotspots, key=lambda item: item["issues"], reverse=True)[:10],
+            "hotspots": sorted(
+                hotspots,
+                key=lambda item: (
+                    context_rank(next((m.context for m in metrics if m.file == item["file"]), "production")),
+                    -item["issues"],
+                ),
+            )[:10],
         }
 
     def _generated_tests_summary(self, tests, generation_metadata: dict | None = None) -> dict:

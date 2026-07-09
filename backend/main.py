@@ -5,6 +5,7 @@ import shutil
 import uuid
 import zipfile
 import csv
+import json
 from io import StringIO
 
 import uvicorn
@@ -104,6 +105,15 @@ def detect_language(files):
 
 
 def project_summary(project: Project) -> dict:
+    frameworks = []
+    try:
+        latest_report = project.reports[0] if project.reports else None
+        if latest_report:
+            report_data = json.loads(latest_report.report_json)
+            frameworks = report_data.get("metadata", {}).get("project_intelligence", {}).get("frameworks", [])
+    except Exception:
+        frameworks = []
+
     return {
         "id": project.id,
         "project_id": project.id,
@@ -113,6 +123,7 @@ def project_summary(project: Project) -> dict:
         "source_url": project.source_url,
         "filename": project.filename,
         "language": project.language,
+        "frameworks": frameworks,
         "total_files": project.total_files,
         "status": project.status,
         "progress": project.progress,

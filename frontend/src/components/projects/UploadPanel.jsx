@@ -3,7 +3,7 @@ import { CheckCircle2, Loader2, Play, UploadCloud } from "lucide-react";
 import { analyzeProject, uploadProjectZip } from "../../api/client";
 import AnalysisResultPanel from "../analysis/AnalysisResultPanel";
 
-export default function UploadPanel() {
+export default function UploadPanel({ onAnalysisComplete }) {
   const inputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -83,6 +83,7 @@ export default function UploadPanel() {
 
       setAnalysisStatus("success");
       setAnalysisReport(result.report);
+      onAnalysisComplete?.();
     } catch (error) {
       setAnalysisStatus("error");
       setMessage(error.userMessage || "Analysis failed. Check the backend connection.");

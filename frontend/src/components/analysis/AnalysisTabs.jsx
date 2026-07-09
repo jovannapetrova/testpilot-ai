@@ -15,7 +15,7 @@ function SummaryCards({ active, report, testMetadata }) {
 
   if (active === "Security") {
     const grouped = new Set(findings.map((item) => item.fingerprint || `${item.issue}-${item.file}`));
-    const count = (severity) => findings.filter((item) => item.severity === severity).length;
+    const count = (severity) => findings.filter((item) => String(item.severity || "").split(".").pop() === severity).length;
     return (
       <div className="tab-summary-grid">
         <div><span>Critical</span><strong>{count("critical")}</strong></div>
@@ -44,7 +44,19 @@ function SummaryCards({ active, report, testMetadata }) {
 
   if (active === "Quality Metrics") {
     const issueCount = quality.reduce((sum, item) => sum + ((item.quality_issues || item.issues || []).length), 0);
-    const highestRisk = [...quality].sort((a, b) => ((b.quality_issues || b.issues || []).length) - ((a.quality_issues || a.issues || []).length))[0];
+    const contextRank = (context) => ({
+      production: 0,
+      config: 1,
+      ci: 2,
+      test: 3,
+      example: 4,
+      docs: 5,
+    }[String(context || "production").toLowerCase()] ?? 6);
+    const highestRisk = [...quality].sort((a, b) => {
+      const rankDelta = contextRank(a.context) - contextRank(b.context);
+      if (rankDelta !== 0) return rankDelta;
+      return ((b.quality_issues || b.issues || []).length) - ((a.quality_issues || a.issues || []).length);
+    })[0];
     return (
       <div className="tab-summary-grid">
         <div><span>Issues</span><strong>{issueCount}</strong></div>

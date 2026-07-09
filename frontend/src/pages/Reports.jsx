@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
 import { RefreshCw, Trash2 } from "lucide-react";
 import {
   clearReports,
@@ -14,11 +13,10 @@ import ReportViewer from "../components/reports/ReportViewer";
 import CompareReports from "../components/reports/CompareReports";
 
 export default function Reports() {
-  const location = useLocation();
-  const isComparisonRoute = location.pathname === "/comparison";
   const [reports, setReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const stats = useMemo(() => {
     if (!reports.length) return { count: 0, security: 0, testing: 0 };
@@ -37,15 +35,28 @@ export default function Reports() {
   }, [reports]);
 
   const loadReports = async () => {
-    setLoading(true);
-    const result = await getReports();
-    setReports(result.reports || []);
-    setLoading(false);
+    try {
+      setLoading(true);
+      setError("");
+      const result = await getReports();
+      setReports(result.reports || []);
+    } catch (err) {
+      setError(err.userMessage || "Reports could not be loaded.");
+      setReports([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openReport = async (projectId) => {
-    const result = await getReport(projectId);
-    setSelectedReport(result.report);
+    try {
+      setError("");
+      const result = await getReport(projectId);
+      setSelectedReport(result.report);
+    } catch (err) {
+      setSelectedReport(null);
+      setError(err.userMessage || "This report is no longer available.");
+    }
   };
 
   const handleDelete = async (projectId) => {
@@ -74,13 +85,9 @@ export default function Reports() {
     <div>
       <div className="page-header reports-header">
         <div>
-          <p className="eyebrow">{isComparisonRoute ? "Report comparison" : "Audit-ready outputs"}</p>
-          <h2>{isComparisonRoute ? "Comparison Center" : "Reports Center"}</h2>
-          <p>
-            {isComparisonRoute
-              ? "Compare report deltas, score movement and project quality posture."
-              : "View, compare, export and manage generated TestPilot AI reports."}
-          </p>
+          <p className="eyebrow">Audit-ready outputs</p>
+          <h2>Reports Center</h2>
+          <p>View, compare, export and manage generated TestPilot AI reports.</p>
         </div>
 
         <div className="reports-header-actions">
@@ -103,6 +110,15 @@ export default function Reports() {
         <ReportCard title="Average Security" value={stats.security} />
         <ReportCard title="Average Testing" value={stats.testing} />
       </div>
+
+      {error && (
+        <div className="card error-state">
+          <strong>{error}</strong>
+          <button className="btn btn-ghost" onClick={loadReports}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {!reports.length ? (
         <EmptyReports />
