@@ -16,6 +16,24 @@ const api = axios.create({
   timeout: 120000,
 });
 
+let activeSession = null;
+
+export function setAuthSession(session) {
+  activeSession = session;
+  if (session?.access_token) {
+    api.defaults.headers.common.Authorization = `Bearer ${session.access_token}`;
+  } else {
+    delete api.defaults.headers.common.Authorization;
+  }
+}
+
+api.interceptors.request.use((config) => {
+  if (activeSession?.access_token) {
+    config.headers.Authorization = `Bearer ${activeSession.access_token}`;
+  }
+  return config;
+});
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -29,6 +47,53 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+export async function registerUser(payload) {
+  const response = await api.post("/auth/register", payload);
+  return response.data;
+}
+
+export async function loginUser(payload) {
+  const response = await api.post("/auth/login", payload);
+  return response.data;
+}
+
+export async function refreshSession(refreshToken) {
+  const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+    refresh_token: refreshToken,
+  });
+  return response.data;
+}
+
+export async function logoutUser() {
+  const response = await api.post("/auth/logout");
+  return response.data;
+}
+
+export async function forgotPassword(email) {
+  const response = await api.post("/auth/forgot-password", { email });
+  return response.data;
+}
+
+export async function getCurrentUser() {
+  const response = await api.get("/users/me");
+  return response.data;
+}
+
+export async function updateCurrentUser(payload) {
+  const response = await api.patch("/users/me", payload);
+  return response.data;
+}
+
+export async function changePassword(payload) {
+  const response = await api.post("/users/me/change-password", payload);
+  return response.data;
+}
+
+export async function deleteCurrentUser() {
+  const response = await api.delete("/users/me");
+  return response.data;
+}
 
 export async function uploadProjectZip(file) {
   const formData = new FormData();
@@ -48,6 +113,11 @@ export async function analyzeProject(projectId) {
 
 export async function getReports() {
   const response = await api.get("/reports");
+  return response.data;
+}
+
+export async function getProjects(params = {}) {
+  const response = await api.get("/projects", { params });
   return response.data;
 }
 
@@ -74,6 +144,21 @@ export function getReportCsvUrl(projectId) {
 
 export function getReportMarkdownUrl(projectId) {
   return `${API_BASE_URL}/reports/${projectId}/markdown`;
+}
+
+export async function downloadReportFile(projectId, format) {
+  const response = await api.get(`/reports/${projectId}/${format}`, {
+    responseType: "blob",
+  });
+  const extension = format === "markdown" ? "md" : format;
+  const url = window.URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `testpilot-report-${projectId}.${extension}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export async function compareReports(firstId, secondId) {

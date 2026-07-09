@@ -36,10 +36,14 @@ Environment variables:
 
 ```bash
 PYTHON_VERSION=3.11.9
+DATABASE_URL=<managed-postgres-connection-string>
+JWT_SECRET=<generated-secret>
 LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 ENABLE_TEST_EXECUTION=false
 ```
+
+The backend uses SQLite automatically for local development. Production should use PostgreSQL through `DATABASE_URL` so users, projects, reports and generated artifacts survive restarts and deployments.
 
 Health check path:
 

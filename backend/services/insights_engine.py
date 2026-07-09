@@ -40,7 +40,7 @@ def build_ai_insights(report_data: dict) -> dict:
             "what": "Increase coverage for core production modules.",
             "why": "Low or estimated coverage weakens confidence in generated recommendations and refactoring safety.",
             "impact": "Improves release confidence and reduces regression risk.",
-            "how_to_fix": "Start with uncovered production files and convert review TODOs into executable unit/API tests.",
+            "how_to_fix": "Start with uncovered production files and turn review-only targets into executable unit/API tests.",
             "estimated_effort": "medium",
             "business_impact": "Fewer escaped regressions and faster reviews.",
         })

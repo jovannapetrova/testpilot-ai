@@ -34,22 +34,15 @@ class BaseTestStrategy:
             f"// Generated tests for {source_file}",
             f"// Strategy: {self.name}",
             "",
-            "describe('Generated smoke tests', () => {",
-            "  test('test environment is ready', () => {",
-            "    expect(true).toBe(true);",
-            "  });",
+            "// No executable tests were generated because this fallback strategy",
+            "// could not infer safe imports, fixtures, or meaningful assertions.",
         ]
 
         for fn in functions:
             lines += [
-                "",
-                f"  test('{fn} should be reviewable', () => {{",
-                f"    // TODO: import and test {fn} with Jest/React Testing Library",
-                "    expect(typeof '" + fn + "').toBe('string');",
-                "  });",
+                f"// Human test design required for {fn}: add framework-aware fixtures and real assertions.",
             ]
 
-        lines.append("});")
         return "\n".join(lines)
 
     def generate_java_tests(self, source_file, methods):
@@ -59,21 +52,12 @@ class BaseTestStrategy:
             "import static org.junit.jupiter.api.Assertions.*;",
             "",
             f"class {class_name}GeneratedTest {{",
-            "",
-            "    @Test",
-            "    void generatedTestTemplate() {",
-            "        assertTrue(true);",
-            "    }",
         ]
 
         for method in methods:
             lines += [
                 "",
-                "    @Test",
-                f"    void {method}ShouldBeReviewed() {{",
-                f"        // TODO: instantiate class and test {method}",
-                "        assertTrue(true);",
-                "    }",
+                f"    // Human test design required for {method}: instantiate the target with real fixtures and assertions.",
             ]
 
         lines.append("}")

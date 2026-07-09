@@ -7,12 +7,7 @@ import {
   FileCode2,
   Trash2,
 } from "lucide-react";
-import {
-  getReportJsonUrl,
-  getReportPdfUrl,
-  getReportCsvUrl,
-  getReportMarkdownUrl,
-} from "../../api/client";
+import { downloadReportFile } from "../../api/client";
 
 export default function ReportTable({ reports = [], onOpen, onDelete }) {
   return (
@@ -51,25 +46,25 @@ export default function ReportTable({ reports = [], onOpen, onDelete }) {
                 <Eye size={16} />
               </button>
 
-              <a href={getReportPdfUrl(report.project_id)} target="_blank">
+              <button onClick={() => downloadReportFile(report.project_id, "pdf")} title="Download PDF">
                 <FileText size={16} />
-              </a>
+              </button>
 
-              <a href={getReportJsonUrl(report.project_id)} target="_blank">
+              <button onClick={() => downloadReportFile(report.project_id, "json")} title="Download JSON">
                 <FileJson size={16} />
-              </a>
+              </button>
 
-              <a href={getReportCsvUrl(report.project_id)} target="_blank">
+              <button onClick={() => downloadReportFile(report.project_id, "csv")} title="Download CSV">
                 <Table size={16} />
-              </a>
+              </button>
 
-              <a href={getReportMarkdownUrl(report.project_id)} target="_blank">
+              <button onClick={() => downloadReportFile(report.project_id, "markdown")} title="Download Markdown">
                 <FileCode2 size={16} />
-              </a>
+              </button>
 
-              <a href={getReportPdfUrl(report.project_id)} download>
+              <button onClick={() => downloadReportFile(report.project_id, "pdf")} title="Download report">
                 <Download size={16} />
-              </a>
+              </button>
 
               <button
                 className="danger-action"

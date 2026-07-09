@@ -130,3 +130,45 @@ class AnalysisReport(BaseModel):
 
 class GitHubAnalyzeRequest(BaseModel):
     url: str
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=160)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    remember_me: bool = False
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=2, max_length=160)
+    avatar_url: Optional[str] = Field(default=None, max_length=500)
+
+class AuthResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: dict[str, Any]
+
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    source_type: str
+    source_url: Optional[str] = None
+    filename: Optional[str] = None
+    language: str = "Unknown"
+    total_files: int = 0
+    status: str = "queued"
+    progress: int = 0
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    completed_at: Optional[str] = None

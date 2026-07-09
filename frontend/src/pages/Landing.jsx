@@ -46,9 +46,13 @@ export default function Landing() {
           </div>
         </div>
 
-        <Link to="/dashboard" className="btn btn-ghost">
-          Open Console
-        </Link>
+        <div className="landing-links">
+          <Link to="/about">About</Link>
+          <Link to="/docs">Docs</Link>
+          <Link to="/login" className="btn btn-ghost">
+            Sign in
+          </Link>
+        </div>
       </nav>
 
       <section className="hero card">
@@ -73,8 +77,8 @@ export default function Landing() {
             <Link to="/dashboard" className="btn btn-primary">
               Get Started
             </Link>
-            <Link to="/projects" className="btn btn-ghost">
-              Analyze Project
+            <Link to="/register" className="btn btn-ghost">
+              Create Account
             </Link>
           </div>
         </div>
@@ -123,6 +127,9 @@ export default function Landing() {
           );
         })}
       </section>
+      <footer className="landing-footer">
+        TestPilot AI protects each user workspace with JWT authentication and user-scoped report history.
+      </footer>
     </main>
   );
 }

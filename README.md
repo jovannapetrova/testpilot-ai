@@ -1,8 +1,8 @@
 # TestPilot AI
 
-**TestPilot AI** is an intelligent multi-agent platform for automated software testing and software quality evaluation.
+**TestPilot AI** is an authenticated multi-agent SaaS platform for automated software testing and software quality evaluation.
 
-It analyzes uploaded Python projects, orchestrates multiple specialized agents, generates test suggestions, runs security and quality analysis, calculates scores, and exports reports.
+It analyzes uploaded and GitHub-hosted projects, orchestrates specialized agents, generates test suggestions, runs security and quality analysis, calculates scores, and stores user-scoped reports with PDF/JSON/CSV/Markdown exports.
 
 ## Architecture
 
@@ -21,6 +21,8 @@ React Dashboard -> FastAPI Backend -> Agent Orchestrator
 
 - Frontend: React, Vite, Axios, Recharts, Framer Motion, Lucide React
 - Backend: FastAPI, Python 3.11, Pydantic
+- Persistence: SQLAlchemy with SQLite for development and PostgreSQL-ready production configuration
+- Auth: JWT sessions with bcrypt password hashing
 - Quality/Security: Bandit, Radon, Pytest, Coverage.py
 - Reports: ReportLab + JSON
 - Free deployment: Vercel frontend + Render backend
@@ -71,6 +73,8 @@ Required environment variables:
 
 ```bash
 PYTHON_VERSION=3.11.9
+DATABASE_URL=<managed-postgres-connection-string>
+JWT_SECRET=<generated-secret>
 LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 ENABLE_TEST_EXECUTION=false

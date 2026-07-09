@@ -1,8 +1,18 @@
 import { useTheme } from "../context/ThemeContext";
-import { API_BASE_URL } from "../api/client";
+import { API_BASE_URL, deleteCurrentUser } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 export default function Settings() {
   const { theme, toggleTheme } = useTheme();
+  const { logout } = useAuth();
+
+  const handleDeleteAccount = async () => {
+    const confirmed = window.confirm("Delete your account and all owned reports permanently?");
+    if (!confirmed) return;
+    await deleteCurrentUser();
+    await logout();
+    window.location.href = "/register";
+  };
 
   return (
     <div>
@@ -47,11 +57,19 @@ export default function Settings() {
 
         <div className="card settings-card">
           <h3>Report Storage</h3>
-          <p>Reports can be exported as PDF, JSON, CSV and Markdown.</p>
+          <p>Reports are persisted per user and can be exported as PDF, JSON, CSV and Markdown.</p>
           <span className="status-badge success">
             <span className="status-dot" />
             Enabled
           </span>
+        </div>
+
+        <div className="card settings-card">
+          <h3>Account Security</h3>
+          <p>Delete your account, projects, reports and stored analysis history.</p>
+          <button className="btn btn-danger" onClick={handleDeleteAccount}>
+            Delete Account
+          </button>
         </div>
       </div>
     </div>

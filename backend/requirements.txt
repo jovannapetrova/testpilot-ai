@@ -3,8 +3,13 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic==2.10.4
 pydantic-core==2.27.2
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.10
+bcrypt==4.2.1
+python-jose[cryptography]==3.3.0
 bandit==1.8.0
 pytest==8.3.4
+httpx==0.28.1
 coverage==7.6.10
 radon==6.0.1
 reportlab==4.2.5

@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   GitBranch,
   GitCompare,
+  UserCircle,
 } from "lucide-react";
 
 const links = [
@@ -17,6 +18,7 @@ const links = [
   { to: "/reports", label: "Reports", icon: FileText },
   { to: "/comparison", label: "Comparison", icon: GitCompare },
   { to: "/agents", label: "AI Agents", icon: Bot },
+  { to: "/profile", label: "Profile", icon: UserCircle },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

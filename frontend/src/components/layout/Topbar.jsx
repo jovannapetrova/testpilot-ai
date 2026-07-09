@@ -1,8 +1,24 @@
-import { Bell, Moon, Search, Sun } from "lucide-react";
+import { Bell, LogOut, Moon, Search, Sun } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext.jsx";
 import { useTheme } from "../../context/ThemeContext.jsx";
 
 export default function Topbar() {
   const { theme, toggleTheme } = useTheme();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const initials = (user?.full_name || user?.email || "TP")
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login");
+  };
 
   return (
     <header className="topbar">
@@ -25,7 +41,13 @@ export default function Topbar() {
           {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         </button>
 
-        <div className="avatar">JP</div>
+        <button className="icon-btn" onClick={handleLogout} title="Log out">
+          <LogOut size={18} />
+        </button>
+
+        <button className="avatar avatar-button" onClick={() => navigate("/profile")}>
+          {initials}
+        </button>
       </div>
     </header>
   );

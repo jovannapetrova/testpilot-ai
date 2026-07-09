@@ -6,7 +6,7 @@ import GithubPanel from "../components/projects/GithubPanel";
 import ProjectCard from "../components/projects/ProjectCard";
 import AnalysisResultPanel from "../components/analysis/AnalysisResultPanel";
 
-import { getReports, getReport } from "../api/client";
+import { getProjects, getReport } from "../api/client";
 
 export default function Projects() {
   const location = useLocation();
@@ -15,25 +15,24 @@ export default function Projects() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  const buildProjectCards = (reports) => {
-    return reports.map((report) => ({
-      id: report.project_id,
-      name: report.project_name,
+  const buildProjectCards = (items) => {
+    return items.map((project) => ({
+      id: project.project_id || project.id,
+      name: project.project_name || project.name,
       language:
-        report.language === "python"
+        project.language === "python"
           ? "Python"
-          : report.language || "Unknown",
-      status: report.status === "completed" ? "Completed" : "Running",
-      quality: Number(report.overall_score || 0),
-      created_at: report.created_at,
+          : project.language || "Unknown",
+      status: project.status || "queued",
+      quality: Number(project.overall_score || project.progress || 0),
+      created_at: project.created_at,
     }));
   };
 
   const loadProjects = async () => {
     try {
-      const response = await getReports();
-      const reports = response.reports || [];
-      const cards = buildProjectCards(reports);
+      const response = await getProjects();
+      const cards = buildProjectCards(response.projects || []);
 
       setProjects(cards);
 

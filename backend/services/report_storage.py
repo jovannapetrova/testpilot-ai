@@ -15,13 +15,75 @@ from reportlab.platypus import (
     TableStyle,
     PageBreak,
 )
+from sqlalchemy.orm import Session
+
+from models.database import Project, Report
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DIR = BASE_DIR / "storage" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_analysis_report(report: Any) -> dict:
+def _report_metadata(report_data: dict, json_path: Path | None = None, pdf_path: Path | None = None) -> dict:
+    return {
+        "project_id": report_data["project_id"],
+        "project_name": report_data.get("project_name"),
+        "language": report_data.get("metadata", {})
+        .get("project_profile", {})
+        .get("primary_language", "unknown"),
+        "status": report_data.get("status"),
+        "overall_score": report_data.get("overall_score"),
+        "quality_score": report_data.get("quality_score"),
+        "security_score": report_data.get("security_score"),
+        "test_score": report_data.get("test_score"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "json_path": str(json_path) if json_path else None,
+        "pdf_path": str(pdf_path) if pdf_path else None,
+    }
+
+
+def build_markdown_report(report: dict) -> str:
+    insights = report.get("metadata", {}).get("ai_insights", {})
+    intelligence = report.get("metadata", {}).get("project_intelligence", {})
+
+    md = f"""# TestPilot AI Report
+
+## Project
+**Name:** {report.get("project_name")}  
+**Status:** {report.get("status")}  
+
+## Scores
+| Metric | Score |
+|---|---:|
+| Overall | {report.get("overall_score")} |
+| Quality | {report.get("quality_score")} |
+| Security | {report.get("security_score")} |
+| Testing | {report.get("test_score")} |
+
+## AI Insights
+{insights.get("summary", "No AI insights available.")}
+
+## Project Intelligence
+- Project type: {intelligence.get("project_type")}
+- Language: {intelligence.get("primary_language")}
+- Frameworks: {", ".join(intelligence.get("frameworks", [])) or "None"}
+- Dependencies: {intelligence.get("dependency_count")}
+
+## Findings
+- Security findings: {len(report.get("security_findings", []))}
+- Generated tests: {len(report.get("generated_tests", []))}
+- Recommendations: {len(report.get("recommendations", []))}
+
+## Recommendations
+"""
+
+    for rec in report.get("recommendations", []):
+        md += f"- **{rec.get('title')}**: {rec.get('description')}\n"
+
+    return md
+
+
+def save_analysis_report(report: Any, user_id: str | None = None, db: Session | None = None) -> dict:
     report_data = report.model_dump(mode="json")
     project_id = report_data["project_id"]
 
@@ -35,31 +97,84 @@ def save_analysis_report(report: Any) -> dict:
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(report_data, f, indent=2, ensure_ascii=False)
 
-    metadata = {
-        "project_id": project_id,
-        "project_name": report_data.get("project_name"),
-        "language": report_data.get("metadata", {})
-        .get("project_profile", {})
-        .get("primary_language", "unknown"),
-        "status": report_data.get("status"),
-        "overall_score": report_data.get("overall_score"),
-        "quality_score": report_data.get("quality_score"),
-        "security_score": report_data.get("security_score"),
-        "test_score": report_data.get("test_score"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "json_path": str(json_path),
-        "pdf_path": str(pdf_path),
-    }
+    metadata = _report_metadata(report_data, json_path, pdf_path)
 
     with metadata_path.open("w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
     generate_pdf_report(pdf_path, report_data)
 
+    if db and user_id:
+        project = db.get(Project, project_id)
+        if project and project.user_id == user_id:
+            project.status = "completed"
+            project.progress = 100
+            project.completed_at = datetime.now(timezone.utc)
+            project.updated_at = datetime.now(timezone.utc)
+
+        existing = db.query(Report).filter(
+            Report.project_id == project_id,
+            Report.user_id == user_id,
+        ).first()
+        report_json = json.dumps(report_data, ensure_ascii=False)
+        pdf_blob = pdf_path.read_bytes() if pdf_path.exists() else None
+        markdown_text = build_markdown_report(report_data)
+
+        if existing:
+            existing.project_name = report_data.get("project_name") or project_id
+            existing.status = report_data.get("status") or "completed"
+            existing.language = metadata.get("language") or "unknown"
+            existing.overall_score = float(report_data.get("overall_score") or 0)
+            existing.quality_score = float(report_data.get("quality_score") or 0)
+            existing.security_score = float(report_data.get("security_score") or 0)
+            existing.test_score = float(report_data.get("test_score") or 0)
+            existing.report_json = report_json
+            existing.pdf_blob = pdf_blob
+            existing.markdown_text = markdown_text
+        else:
+            db.add(
+                Report(
+                    project_id=project_id,
+                    user_id=user_id,
+                    project_name=report_data.get("project_name") or project_id,
+                    status=report_data.get("status") or "completed",
+                    language=metadata.get("language") or "unknown",
+                    overall_score=float(report_data.get("overall_score") or 0),
+                    quality_score=float(report_data.get("quality_score") or 0),
+                    security_score=float(report_data.get("security_score") or 0),
+                    test_score=float(report_data.get("test_score") or 0),
+                    report_json=report_json,
+                    pdf_blob=pdf_blob,
+                    markdown_text=markdown_text,
+                )
+            )
+
+        db.commit()
+
     return metadata
 
 
-def list_reports() -> list[dict]:
+def _db_report_metadata(report: Report) -> dict:
+    return {
+        "project_id": report.project_id,
+        "project_name": report.project_name,
+        "language": report.language,
+        "status": report.status,
+        "overall_score": report.overall_score,
+        "quality_score": report.quality_score,
+        "security_score": report.security_score,
+        "test_score": report.test_score,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+        "json_path": None,
+        "pdf_path": None,
+    }
+
+
+def list_reports(user_id: str | None = None, db: Session | None = None) -> list[dict]:
+    if db and user_id:
+        reports = db.query(Report).filter(Report.user_id == user_id).order_by(Report.created_at.desc()).all()
+        return [_db_report_metadata(report) for report in reports]
+
     reports = []
 
     for metadata_path in REPORTS_DIR.glob("*/metadata.json"):
@@ -72,7 +187,16 @@ def list_reports() -> list[dict]:
     return sorted(reports, key=lambda x: x.get("created_at", ""), reverse=True)
 
 
-def load_report(project_id: str) -> dict | None:
+def load_report(project_id: str, user_id: str | None = None, db: Session | None = None) -> dict | None:
+    if db and user_id:
+        report = db.query(Report).filter(
+            Report.project_id == project_id,
+            Report.user_id == user_id,
+        ).first()
+        if not report:
+            return None
+        return json.loads(report.report_json)
+
     path = REPORTS_DIR / project_id / "report.json"
 
     if not path.exists():
@@ -88,6 +212,26 @@ def get_report_json_path(project_id: str) -> Path:
 
 def get_report_pdf_path(project_id: str) -> Path:
     return REPORTS_DIR / project_id / "report.pdf"
+
+
+def get_report_record(project_id: str, user_id: str, db: Session) -> Report | None:
+    return db.query(Report).filter(
+        Report.project_id == project_id,
+        Report.user_id == user_id,
+    ).first()
+
+
+def delete_report_record(project_id: str, user_id: str, db: Session) -> bool:
+    report = get_report_record(project_id, user_id, db)
+    if not report:
+        return False
+
+    db.delete(report)
+    project = db.get(Project, project_id)
+    if project and project.user_id == user_id:
+        db.delete(project)
+    db.commit()
+    return True
 
 
 def group_findings(findings: list[dict]) -> list[dict]:
