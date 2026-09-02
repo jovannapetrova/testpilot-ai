@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url VARCHAR(500),
     created_at TIMESTAMP NOT NULL,
     last_login_at TIMESTAMP,
+    password_changed_at TIMESTAMP,
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
@@ -70,16 +71,3 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_user_id ON password_reset_tokens (user_id);
 CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_token_hash ON password_reset_tokens (token_hash);
 CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_expires_at ON password_reset_tokens (expires_at);
-
-CREATE TABLE IF NOT EXISTS magic_link_tokens (
-    id VARCHAR(36) PRIMARY KEY,
-    user_id VARCHAR(36) NOT NULL REFERENCES users(id),
-    token_hash VARCHAR(128) NOT NULL UNIQUE,
-    expires_at TIMESTAMP NOT NULL,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS ix_magic_link_tokens_user_id ON magic_link_tokens (user_id);
-CREATE INDEX IF NOT EXISTS ix_magic_link_tokens_token_hash ON magic_link_tokens (token_hash);
-CREATE INDEX IF NOT EXISTS ix_magic_link_tokens_expires_at ON magic_link_tokens (expires_at);

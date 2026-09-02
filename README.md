@@ -22,7 +22,7 @@ React Dashboard -> FastAPI Backend -> Agent Orchestrator
 - Frontend: React, Vite, Axios, Recharts, Framer Motion, Lucide React
 - Backend: FastAPI, Python 3.11, Pydantic
 - Persistence: SQLAlchemy with SQLite for development and PostgreSQL-ready production configuration
-- Auth: JWT sessions with bcrypt password hashing, refresh sessions, password reset tokens and optional magic-link sign-in
+- Auth: JWT sessions with bcrypt password hashing, refresh sessions and one-time email verification codes for password reset
 - Quality/Security: Bandit, Radon, Pytest, Coverage.py
 - Reports: ReportLab + JSON
 - Free deployment: Vercel frontend + Render backend
@@ -92,17 +92,20 @@ LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 CORS_ORIGIN_REGEX=https://.*\.vercel\.app
 ENABLE_TEST_EXECUTION=false
-FRONTEND_BASE_URL=https://your-vercel-app.vercel.app
-SMTP_HOST=<optional-smtp-host>
-SMTP_USERNAME=<optional-smtp-username>
-SMTP_PASSWORD=<optional-smtp-password>
-SMTP_FROM=<optional-from-address>
+PASSWORD_RESET_CODE_MINUTES=30
+PASSWORD_RESET_RESEND_SECONDS=60
+SMTP_HOST=<smtp-host-for-password-reset-email>
+SMTP_PORT=587
+SMTP_USERNAME=<smtp-username>
+SMTP_PASSWORD=<smtp-password>
+SMTP_FROM=<verified-from-address>
+SMTP_USE_TLS=true
 MAX_UPLOAD_SIZE_MB=50
 MAX_EXTRACTED_SIZE_MB=150
 MAX_ARCHIVE_FILES=5000
 ```
 
-The Blueprint generates `JWT_SECRET` and attaches the managed PostgreSQL `DATABASE_URL`. Set `CORS_ORIGINS` and `FRONTEND_BASE_URL` to the deployed frontend URL during Blueprint setup.
+The Blueprint generates `JWT_SECRET` and attaches the managed PostgreSQL `DATABASE_URL`. Set `CORS_ORIGINS` to the deployed frontend URL during Blueprint setup. SMTP variables are required for production password-reset emails to be delivered.
 
 ### Vercel Frontend
 

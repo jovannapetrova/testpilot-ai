@@ -116,12 +116,49 @@
   border-color: color-mix(in srgb, var(--red) 24%, var(--line));
 }
 
-.auth-debug-token {
-  margin-top: 10px;
-  display: block;
-  overflow-wrap: anywhere;
+.auth-message-success {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--green) 24%, var(--line));
+}
+
+.auth-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.auth-step {
+  min-height: 32px;
+  display: grid;
+  place-items: center;
   color: var(--muted);
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 999px;
   font-size: 12px;
+  font-weight: 800;
+}
+
+.auth-step-active {
+  color: var(--primary-2);
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--line));
+  background: color-mix(in srgb, var(--primary) 10%, var(--panel));
+}
+
+.auth-success-panel {
+  display: grid;
+  gap: 14px;
+  place-items: center;
+  text-align: center;
+  color: var(--green);
+}
+
+.auth-success-panel p {
+  margin: 0;
+  color: var(--text);
+  font-weight: 800;
 }
 
 .auth-submit {

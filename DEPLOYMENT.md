@@ -42,22 +42,22 @@ LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 CORS_ORIGIN_REGEX=https://.*\.vercel\.app
 ENABLE_TEST_EXECUTION=false
-FRONTEND_BASE_URL=https://your-vercel-app.vercel.app
-PASSWORD_RESET_TOKEN_MINUTES=30
-MAGIC_LINK_TOKEN_MINUTES=15
-AUTH_DEBUG_TOKENS=false
+PASSWORD_RESET_CODE_MINUTES=30
+PASSWORD_RESET_RESEND_SECONDS=60
 MAX_UPLOAD_SIZE_MB=50
 MAX_EXTRACTED_SIZE_MB=150
 MAX_ARCHIVE_FILES=5000
-SMTP_HOST=<optional-smtp-host>
-SMTP_USERNAME=<optional-smtp-username>
-SMTP_PASSWORD=<optional-smtp-password>
-SMTP_FROM=<optional-from-address>
+SMTP_HOST=<smtp-host-for-password-reset-email>
+SMTP_PORT=587
+SMTP_USERNAME=<smtp-username>
+SMTP_PASSWORD=<smtp-password>
+SMTP_FROM=<verified-from-address>
+SMTP_USE_TLS=true
 ```
 
-The backend uses SQLite automatically for local development. Production should use PostgreSQL through `DATABASE_URL` so users, projects, reports and generated artifacts survive restarts and deployments.
+The backend uses SQLite automatically for local development. Production should use PostgreSQL through `DATABASE_URL` so users, projects, reports and generated artifacts survive restarts and deployments. SMTP variables are required for production password-reset emails to be delivered.
 
-The Blueprint generates `JWT_SECRET`, attaches `DATABASE_URL` from the managed PostgreSQL database, and prompts for `CORS_ORIGINS` plus `FRONTEND_BASE_URL`. Set both URL variables to the deployed Vercel frontend URL.
+The Blueprint generates `JWT_SECRET`, attaches `DATABASE_URL` from the managed PostgreSQL database, and prompts for `CORS_ORIGINS`. Set it to the deployed Vercel frontend URL.
 
 Health check path:
 

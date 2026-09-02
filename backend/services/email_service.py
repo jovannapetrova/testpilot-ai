@@ -12,40 +12,14 @@ def email_delivery_configured() -> bool:
     return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM"))
 
 
-def debug_tokens_enabled() -> bool:
-    return (
-        os.getenv("AUTH_DEBUG_TOKENS", "false").lower() == "true"
-        and os.getenv("ENVIRONMENT", "development").lower() != "production"
-    )
-
-
-def frontend_base_url() -> str:
-    return os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
-
-
-def send_password_reset_email(email: str, token: str) -> bool:
-    link = f"{frontend_base_url()}/reset-password?token={token}"
+def send_password_reset_code_email(email: str, code: str) -> bool:
     return _send_email(
         email,
-        "Reset your TestPilot AI password",
+        "Your TestPilot AI password reset code",
         (
-            "Use the secure link below to reset your TestPilot AI password. "
-            "The link expires soon and can be used only once.\n\n"
-            f"{link}\n\n"
-            "If you did not request this, you can ignore this message."
-        ),
-    )
-
-
-def send_magic_link_email(email: str, token: str) -> bool:
-    link = f"{frontend_base_url()}/magic-link?token={token}"
-    return _send_email(
-        email,
-        "Your TestPilot AI sign-in link",
-        (
-            "Use the secure link below to sign in to TestPilot AI. "
-            "The link expires soon and can be used only once.\n\n"
-            f"{link}\n\n"
+            "Use this one-time verification code to reset your TestPilot AI password:\n\n"
+            f"{code}\n\n"
+            "The code expires soon and can be used only once. "
             "If you did not request this, you can ignore this message."
         ),
     )

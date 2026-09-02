@@ -11,11 +11,10 @@ from fastapi.testclient import TestClient
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-secret"
-os.environ["AUTH_DEBUG_TOKENS"] = "true"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from main import app, mark_stale_analysis_jobs  # noqa: E402
-from models.database import MagicLinkToken, PasswordResetToken, Project, Report, utc_now  # noqa: E402
+from models.database import PasswordResetToken, Project, Report, utc_now  # noqa: E402
 from services.database import SessionLocal, init_db  # noqa: E402
 
 client = TestClient(app)
@@ -96,6 +95,18 @@ def _insert_report(user_id: str, project_id: str, project_name: str, score: int 
         db.close()
 
 
+def _capture_reset_codes(monkeypatch):
+    deliveries = []
+    monkeypatch.setattr("main.email_delivery_configured", lambda: True)
+
+    def send_code(email: str, code: str) -> bool:
+        deliveries.append({"email": email, "code": code})
+        return True
+
+    monkeypatch.setattr("main.send_password_reset_code_email", send_code)
+    return deliveries
+
+
 def test_register_rejects_invalid_and_duplicate_email():
     init_db()
     invalid = client.post(
@@ -153,24 +164,71 @@ def test_login_refresh_current_user_and_change_password_flow():
     assert new_login.status_code == 200
 
 
-def test_password_reset_token_is_one_time_and_expires():
+def test_password_reset_code_flow_is_one_time_and_rejects_old_password(monkeypatch):
     session = _register("reset")
     email = session["user"]["email"]
+    deliveries = _capture_reset_codes(monkeypatch)
 
     forgot = client.post("/auth/forgot-password", json={"email": email})
     assert forgot.status_code == 200
-    token = forgot.json().get("debug_reset_token")
-    assert token
+    assert forgot.json()["message"] == "If an account exists for that email, a verification code will be sent shortly."
+    assert "debug_reset_token" not in forgot.json()
+    assert len(deliveries) == 1
+    code = deliveries[0]["code"]
+    assert len(code) == 6
+    assert code.isdigit()
 
-    reset = client.post("/auth/reset-password", json={"token": token, "new_password": "changed-password"})
+    verify = client.post("/auth/verify-reset-code", json={"email": email, "code": code})
+    assert verify.status_code == 200
+
+    reset = client.post(
+        "/auth/reset-password",
+        json={
+            "email": email,
+            "code": code,
+            "new_password": "changed-password",
+            "confirm_password": "changed-password",
+        },
+    )
     assert reset.status_code == 200
 
-    reuse = client.post("/auth/reset-password", json={"token": token, "new_password": "changed-again"})
+    reuse = client.post(
+        "/auth/reset-password",
+        json={
+            "email": email,
+            "code": code,
+            "new_password": "changed-again",
+            "confirm_password": "changed-again",
+        },
+    )
     assert reuse.status_code == 400
-    assert reuse.json()["error"]["code"] == "SESSION_EXPIRED"
+    assert reuse.json()["error"]["code"] == "INVALID_RESET_CODE"
 
-    forgot_again = client.post("/auth/forgot-password", json={"email": email})
-    expired_token = forgot_again.json()["debug_reset_token"]
+    old_login = client.post("/auth/login", json={"email": email, "password": "strong-password"})
+    assert old_login.status_code == 401
+
+    new_login = client.post("/auth/login", json={"email": email, "password": "changed-password"})
+    assert new_login.status_code == 200
+
+    old_profile = client.get("/users/me", headers=_auth_headers(session))
+    assert old_profile.status_code == 401
+
+    old_refresh = client.post("/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert old_refresh.status_code == 401
+
+
+def test_password_reset_rejects_invalid_and_expired_codes(monkeypatch):
+    session = _register("expired-reset")
+    email = session["user"]["email"]
+    deliveries = _capture_reset_codes(monkeypatch)
+
+    invalid = client.post("/auth/verify-reset-code", json={"email": email, "code": "000000"})
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "INVALID_RESET_CODE"
+
+    forgot = client.post("/auth/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    expired_code = deliveries[-1]["code"]
     db = SessionLocal()
     try:
         row = db.query(PasswordResetToken).filter(PasswordResetToken.used_at.is_(None)).order_by(PasswordResetToken.created_at.desc()).first()
@@ -179,38 +237,101 @@ def test_password_reset_token_is_one_time_and_expires():
     finally:
         db.close()
 
-    expired = client.post("/auth/reset-password", json={"token": expired_token, "new_password": "valid-password"})
+    expired = client.post("/auth/verify-reset-code", json={"email": email, "code": expired_code})
     assert expired.status_code == 400
+    assert expired.json()["error"]["code"] == "INVALID_RESET_CODE"
 
 
-def test_magic_link_token_is_one_time_and_expires():
-    session = _register("magic")
+def test_password_reset_resend_is_rate_limited_and_invalidates_previous_code(monkeypatch):
+    session = _register("resend")
     email = session["user"]["email"]
+    previous_resend = os.environ.get("PASSWORD_RESET_RESEND_SECONDS")
+    os.environ["PASSWORD_RESET_RESEND_SECONDS"] = "60"
+    deliveries = _capture_reset_codes(monkeypatch)
+    generated_codes = iter(["111111", "222222"])
+    monkeypatch.setattr("main.create_verification_code", lambda: next(generated_codes))
 
-    request = client.post("/auth/magic-link/request", json={"email": email})
-    assert request.status_code == 200
-    token = request.json().get("debug_magic_link_token")
-    assert token
-
-    verify = client.post("/auth/magic-link/verify", json={"token": token})
-    assert verify.status_code == 200
-    assert verify.json()["access_token"]
-
-    reuse = client.post("/auth/magic-link/verify", json={"token": token})
-    assert reuse.status_code == 400
-
-    request_again = client.post("/auth/magic-link/request", json={"email": email})
-    expired_token = request_again.json()["debug_magic_link_token"]
-    db = SessionLocal()
     try:
-        row = db.query(MagicLinkToken).filter(MagicLinkToken.used_at.is_(None)).order_by(MagicLinkToken.created_at.desc()).first()
-        row.expires_at = utc_now() - timedelta(minutes=1)
-        db.commit()
-    finally:
-        db.close()
+        first = client.post("/auth/forgot-password", json={"email": email})
+        assert first.status_code == 200
+        assert first.json()["resend_after_seconds"] == 60
+        assert deliveries[-1]["code"] == "111111"
 
-    expired = client.post("/auth/magic-link/verify", json={"token": expired_token})
-    assert expired.status_code == 400
+        throttled = client.post("/auth/forgot-password", json={"email": email})
+        assert throttled.status_code == 200
+        assert len(deliveries) == 1
+
+        db = SessionLocal()
+        try:
+            row = db.query(PasswordResetToken).filter(PasswordResetToken.used_at.is_(None)).order_by(PasswordResetToken.created_at.desc()).first()
+            row.created_at = utc_now() - timedelta(seconds=61)
+            db.commit()
+        finally:
+            db.close()
+
+        resent = client.post("/auth/forgot-password", json={"email": email})
+        assert resent.status_code == 200
+        assert deliveries[-1]["code"] == "222222"
+
+        old_code = client.post("/auth/verify-reset-code", json={"email": email, "code": "111111"})
+        assert old_code.status_code == 400
+
+        new_code = client.post("/auth/verify-reset-code", json={"email": email, "code": "222222"})
+        assert new_code.status_code == 200
+    finally:
+        if previous_resend is None:
+            os.environ.pop("PASSWORD_RESET_RESEND_SECONDS", None)
+        else:
+            os.environ["PASSWORD_RESET_RESEND_SECONDS"] = previous_resend
+
+
+def test_forgot_password_keeps_unknown_email_response_generic(monkeypatch):
+    deliveries = _capture_reset_codes(monkeypatch)
+
+    known_session = _register("known-reset")
+    known = client.post("/auth/forgot-password", json={"email": known_session["user"]["email"]})
+    unknown = client.post("/auth/forgot-password", json={"email": _email("unknown-reset")})
+
+    assert known.status_code == 200
+    assert unknown.status_code == 200
+    assert known.json()["message"] == unknown.json()["message"]
+    assert "debug_reset_token" not in unknown.json()
+    assert len(deliveries) == 1
+
+
+def test_password_reset_validates_password_strength_and_confirmation(monkeypatch):
+    session = _register("reset-validation")
+    email = session["user"]["email"]
+    deliveries = _capture_reset_codes(monkeypatch)
+
+    forgot = client.post("/auth/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    code = deliveries[-1]["code"]
+
+    short_password = client.post(
+        "/auth/reset-password",
+        json={"email": email, "code": code, "new_password": "short", "confirm_password": "short"},
+    )
+    assert short_password.status_code == 422
+
+    mismatch = client.post(
+        "/auth/reset-password",
+        json={
+            "email": email,
+            "code": code,
+            "new_password": "valid-password",
+            "confirm_password": "different-password",
+        },
+    )
+    assert mismatch.status_code == 422
+
+
+def test_magic_link_endpoints_are_removed():
+    request = client.post("/auth/magic-link/request", json={"email": _email("magic-removed")})
+    verify = client.post("/auth/magic-link/verify", json={"token": "not-a-token"})
+
+    assert request.status_code == 404
+    assert verify.status_code == 404
 
 
 def test_report_download_delete_and_compare_are_user_scoped():
@@ -349,14 +470,13 @@ def test_stale_running_jobs_are_marked_failed_on_recovery():
     assert progress.json()["current_agent"] == "Interrupted"
 
 
-def test_account_deletion_cascades_owned_projects_reports_and_tokens():
+def test_account_deletion_cascades_owned_projects_reports_and_tokens(monkeypatch):
     session = _register("delete")
     project_id = f"project-{uuid4().hex[:8]}"
     _insert_report(session["user"]["id"], project_id, "Delete Me", 75)
+    _capture_reset_codes(monkeypatch)
     forgot = client.post("/auth/forgot-password", json={"email": session["user"]["email"]})
-    magic = client.post("/auth/magic-link/request", json={"email": session["user"]["email"]})
     assert forgot.status_code == 200
-    assert magic.status_code == 200
 
     delete = client.delete("/users/me", headers=_auth_headers(session))
     assert delete.status_code == 200
@@ -366,6 +486,5 @@ def test_account_deletion_cascades_owned_projects_reports_and_tokens():
         assert db.get(Project, project_id) is None
         assert db.query(Report).filter(Report.project_id == project_id).first() is None
         assert db.query(PasswordResetToken).filter(PasswordResetToken.user_id == session["user"]["id"]).first() is None
-        assert db.query(MagicLinkToken).filter(MagicLinkToken.user_id == session["user"]["id"]).first() is None
     finally:
         db.close()

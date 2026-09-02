@@ -19,18 +19,17 @@ from git import Repo
 from sqlalchemy.orm import Session
 
 from agents.orchestrator import AgentOrchestrator
-from models.database import MagicLinkToken, PasswordResetToken, Project, User, utc_now
+from models.database import PasswordResetToken, Project, User, utc_now
 from models.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     GitHubAnalyzeRequest,
     LoginRequest,
-    MagicLinkRequest,
-    MagicLinkVerifyRequest,
     RefreshRequest,
     RegisterRequest,
     ResetPasswordRequest,
     UpdateProfileRequest,
+    VerifyResetCodeRequest,
 )
 from services.analysis_progress import AGENT_ORDER, get_progress, start_analysis, fail_analysis
 from services.api_errors import (
@@ -40,22 +39,21 @@ from services.api_errors import (
 )
 from services.auth_service import (
     create_access_token,
-    create_one_time_token,
     create_refresh_token,
+    create_verification_code,
     decode_token,
     get_current_user,
-    hash_one_time_token,
+    hash_reset_code,
     hash_password,
     normalize_email,
     public_user,
+    token_is_current_for_user,
     verify_password,
 )
 from services.database import SessionLocal, get_db, init_db
 from services.email_service import (
-    debug_tokens_enabled,
     email_delivery_configured,
-    send_magic_link_email,
-    send_password_reset_email,
+    send_password_reset_code_email,
 )
 from services.report_storage import (
     REPORTS_DIR,
@@ -92,7 +90,7 @@ CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX") or None
 
 OPENAPI_TAGS = [
     {"name": "Health", "description": "Runtime health and deployment checks."},
-    {"name": "Authentication", "description": "JWT session, password reset and magic-link authentication."},
+    {"name": "Authentication", "description": "JWT session and password reset verification-code authentication."},
     {"name": "Users", "description": "Authenticated user profile and account management."},
     {"name": "Projects", "description": "ZIP upload, GitHub analysis and project archive operations."},
     {"name": "Analysis", "description": "Analysis progress and agent execution state."},
@@ -331,40 +329,82 @@ def _token_expired(value) -> bool:
     return value < datetime.now(timezone.utc)
 
 
-def _issue_password_reset_token(user: User, db: Session) -> str:
+PASSWORD_RESET_GENERIC_MESSAGE = "If an account exists for that email, a verification code will be sent shortly."
+
+
+def _password_reset_code_minutes() -> int:
+    return max(1, int(os.getenv("PASSWORD_RESET_CODE_MINUTES", os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))))
+
+
+def _password_reset_resend_seconds() -> int:
+    return max(0, int(os.getenv("PASSWORD_RESET_RESEND_SECONDS", "60")))
+
+
+def _latest_active_password_reset_code(user: User, db: Session) -> PasswordResetToken | None:
+    return (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .order_by(PasswordResetToken.created_at.desc())
+        .first()
+    )
+
+
+def _seconds_until_reset_resend(reset_code: PasswordResetToken | None) -> int:
+    resend_seconds = _password_reset_resend_seconds()
+    if resend_seconds <= 0 or not reset_code or not reset_code.created_at:
+        return 0
+
+    created_at = reset_code.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    elapsed = int((datetime.now(timezone.utc) - created_at).total_seconds())
+    return max(0, resend_seconds - elapsed)
+
+
+def _issue_password_reset_code(user: User, db: Session) -> str:
     now = utc_now()
     db.query(PasswordResetToken).filter(
         PasswordResetToken.user_id == user.id,
         PasswordResetToken.used_at.is_(None),
     ).update({"used_at": now})
-    token = create_one_time_token()
+    code = create_verification_code()
     db.add(
         PasswordResetToken(
             user_id=user.id,
-            token_hash=hash_one_time_token(token),
-            expires_at=now + timedelta(minutes=int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))),
+            token_hash=hash_reset_code(code),
+            expires_at=now + timedelta(minutes=_password_reset_code_minutes()),
         )
     )
     db.commit()
-    return token
+    return code
 
 
-def _issue_magic_link_token(user: User, db: Session) -> str:
-    now = utc_now()
-    db.query(MagicLinkToken).filter(
-        MagicLinkToken.user_id == user.id,
-        MagicLinkToken.used_at.is_(None),
-    ).update({"used_at": now})
-    token = create_one_time_token()
-    db.add(
-        MagicLinkToken(
-            user_id=user.id,
-            token_hash=hash_one_time_token(token),
-            expires_at=now + timedelta(minutes=int(os.getenv("MAGIC_LINK_TOKEN_MINUTES", "15"))),
+def _find_valid_password_reset_code(
+    email: str,
+    code: str,
+    db: Session,
+) -> tuple[User | None, PasswordResetToken | None]:
+    user = db.query(User).filter(User.email == normalize_email(email)).first()
+    if not user or not user.is_active:
+        return user, None
+
+    reset_code = (
+        db.query(PasswordResetToken)
+        .filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.token_hash == hash_reset_code(code),
+            PasswordResetToken.used_at.is_(None),
         )
+        .first()
     )
-    db.commit()
-    return token
+
+    if not reset_code or _token_expired(reset_code.expires_at):
+        return user, None
+
+    return user, reset_code
 
 
 def restore_uploaded_project(project: Project, project_dir: Path, extracted_dir: Path) -> None:
@@ -507,6 +547,12 @@ def refresh_session(request: RefreshRequest, db: Session = Depends(get_db)):
             "Your session is invalid or expired. Please sign in again.",
             status.HTTP_401_UNAUTHORIZED,
         )
+    if not token_is_current_for_user(payload, user):
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "Your password was changed. Please sign in again.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
     return create_auth_payload(user)
 
 
@@ -515,117 +561,62 @@ def logout(_: User = Depends(get_current_user)):
     return {"success": True, "message": "Logged out successfully."}
 
 
-@app.post("/auth/forgot-password", tags=["Authentication"], summary="Request password reset instructions")
+@app.post("/auth/forgot-password", tags=["Authentication"], summary="Request a password reset verification code")
 def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == normalize_email(request.email)).first()
     delivery_ready = email_delivery_configured()
-    debug_token = None
+    resend_after_seconds = _password_reset_resend_seconds()
 
-    if user and (delivery_ready or debug_tokens_enabled()):
-        token = _issue_password_reset_token(user, db)
-        if delivery_ready:
-            send_password_reset_email(user.email, token)
-        if debug_tokens_enabled():
-            debug_token = token
+    if user and user.is_active and delivery_ready:
+        active_code = _latest_active_password_reset_code(user, db)
+        if _seconds_until_reset_resend(active_code) == 0:
+            code = _issue_password_reset_code(user, db)
+            send_password_reset_code_email(user.email, code)
 
-    response = {
+    return {
         "success": True,
         "delivery_configured": delivery_ready,
-        "message": (
-            "If an account exists for that email, password reset instructions will be sent."
-            if delivery_ready
-            else "Password reset email delivery is not configured for this environment."
-        ),
+        "message": PASSWORD_RESET_GENERIC_MESSAGE,
+        "resend_after_seconds": resend_after_seconds,
     }
-    if debug_token:
-        response["debug_reset_token"] = debug_token
-    return response
 
 
-@app.post("/auth/reset-password", tags=["Authentication"], summary="Reset a password with a one-time token")
+@app.post("/auth/verify-reset-code", tags=["Authentication"], summary="Verify a password reset code")
+def verify_reset_code(request: VerifyResetCodeRequest, db: Session = Depends(get_db)):
+    _, reset_code = _find_valid_password_reset_code(request.email, request.code, db)
+    if not reset_code:
+        raise_api_error(
+            "INVALID_RESET_CODE",
+            "The verification code is invalid or expired. Request a new code.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    return {
+        "success": True,
+        "message": "Verification code accepted. Choose a new password.",
+        "expires_at": _now_iso(reset_code.expires_at),
+    }
+
+
+@app.post("/auth/reset-password", tags=["Authentication"], summary="Reset a password with a verified code")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
-    token_hash = hash_one_time_token(request.token)
-    reset_token = db.query(PasswordResetToken).filter(
-        PasswordResetToken.token_hash == token_hash,
-        PasswordResetToken.used_at.is_(None),
-    ).first()
-
-    if not reset_token or _token_expired(reset_token.expires_at):
+    user, reset_code = _find_valid_password_reset_code(request.email, request.code, db)
+    if not user or not reset_code:
         raise_api_error(
-            "SESSION_EXPIRED",
-            "This reset link is invalid or expired. Request a new password reset link.",
+            "INVALID_RESET_CODE",
+            "The verification code is invalid or expired. Request a new code.",
             status.HTTP_400_BAD_REQUEST,
         )
 
-    user = db.get(User, reset_token.user_id)
-    if not user or not user.is_active:
-        raise_api_error(
-            "AUTH_REQUIRED",
-            "User account is not available.",
-            status.HTTP_401_UNAUTHORIZED,
-        )
-
+    changed_at = utc_now()
     user.password_hash = hash_password(request.new_password)
-    reset_token.used_at = utc_now()
+    user.password_changed_at = changed_at
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": changed_at})
     db.commit()
-    return {"success": True, "message": "Password reset successfully. You can now sign in."}
-
-
-@app.post("/auth/magic-link/request", tags=["Authentication"], summary="Request a one-time sign-in link")
-def request_magic_link(request: MagicLinkRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == normalize_email(request.email)).first()
-    delivery_ready = email_delivery_configured()
-    debug_token = None
-
-    if user and user.is_active and (delivery_ready or debug_tokens_enabled()):
-        token = _issue_magic_link_token(user, db)
-        if delivery_ready:
-            send_magic_link_email(user.email, token)
-        if debug_tokens_enabled():
-            debug_token = token
-
-    response = {
-        "success": True,
-        "delivery_configured": delivery_ready,
-        "message": (
-            "If an account exists for that email, a sign-in link will be sent."
-            if delivery_ready
-            else "Magic-link email delivery is not configured for this environment."
-        ),
-    }
-    if debug_token:
-        response["debug_magic_link_token"] = debug_token
-    return response
-
-
-@app.post("/auth/magic-link/verify", tags=["Authentication"], summary="Verify a one-time magic sign-in link")
-def verify_magic_link(request: MagicLinkVerifyRequest, db: Session = Depends(get_db)):
-    token_hash = hash_one_time_token(request.token)
-    magic_token = db.query(MagicLinkToken).filter(
-        MagicLinkToken.token_hash == token_hash,
-        MagicLinkToken.used_at.is_(None),
-    ).first()
-
-    if not magic_token or _token_expired(magic_token.expires_at):
-        raise_api_error(
-            "SESSION_EXPIRED",
-            "This sign-in link is invalid or expired. Request a new sign-in link.",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    user = db.get(User, magic_token.user_id)
-    if not user or not user.is_active:
-        raise_api_error(
-            "AUTH_REQUIRED",
-            "User account is not available.",
-            status.HTTP_401_UNAUTHORIZED,
-        )
-
-    magic_token.used_at = utc_now()
-    user.last_login_at = utc_now()
-    db.commit()
-    db.refresh(user)
-    return create_auth_payload(user)
+    return {"success": True, "message": "Password reset successful. You can now sign in."}
 
 
 @app.get("/users/me", tags=["Users"], summary="Get current user profile")

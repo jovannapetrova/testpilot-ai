@@ -2,9 +2,10 @@ from __future__ import annotations
 from enum import Enum
 import re
 from typing import Any, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+RESET_CODE_PATTERN = re.compile(r"^\d{6}$")
 
 
 def validate_email(value: str) -> str:
@@ -205,26 +206,31 @@ class ForgotPasswordRequest(BaseModel):
     def email_must_be_valid(cls, value: str) -> str:
         return validate_email(value)
 
-class ResetPasswordRequest(BaseModel):
-    token: str = Field(min_length=20, max_length=512)
-    new_password: str = Field(min_length=8, max_length=128)
+class VerifyResetCodeRequest(ForgotPasswordRequest):
+    code: str = Field(min_length=6, max_length=6)
 
-    @field_validator("new_password")
+    @field_validator("code")
     @classmethod
-    def new_password_must_be_valid(cls, value: str) -> str:
+    def code_must_be_valid(cls, value: str) -> str:
+        code = str(value or "").strip()
+        if not RESET_CODE_PATTERN.match(code):
+            raise ValueError("Enter the 6-digit verification code.")
+        return code
+
+class ResetPasswordRequest(VerifyResetCodeRequest):
+    new_password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password", "confirm_password")
+    @classmethod
+    def password_must_be_valid(cls, value: str) -> str:
         return validate_password(value)
 
-class MagicLinkRequest(BaseModel):
-    email: str
-    redirect_url: Optional[str] = Field(default=None, max_length=1000)
-
-    @field_validator("email")
-    @classmethod
-    def email_must_be_valid(cls, value: str) -> str:
-        return validate_email(value)
-
-class MagicLinkVerifyRequest(BaseModel):
-    token: str = Field(min_length=20, max_length=512)
+    @model_validator(mode="after")
+    def passwords_must_match(self) -> "ResetPasswordRequest":
+        if self.new_password != self.confirm_password:
+            raise ValueError("Password confirmation does not match.")
+        return self
 
 class AuthResponse(BaseModel):
     access_token: str

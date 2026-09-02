@@ -40,6 +40,11 @@ def apply_lightweight_migrations() -> None:
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
 
+    if "users" in tables:
+        columns = {column["name"] for column in inspector.get_columns("users")}
+        if "password_changed_at" not in columns:
+            _execute_ddl("ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP")
+
     if "projects" in tables:
         columns = {column["name"] for column in inspector.get_columns("projects")}
         if "current_stage" not in columns:
@@ -53,7 +58,6 @@ def apply_lightweight_migrations() -> None:
         "CREATE INDEX IF NOT EXISTS ix_projects_updated_at ON projects (updated_at)",
         "CREATE INDEX IF NOT EXISTS ix_reports_created_at ON reports (created_at)",
         "CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_user_id ON password_reset_tokens (user_id)",
-        "CREATE INDEX IF NOT EXISTS ix_magic_link_tokens_user_id ON magic_link_tokens (user_id)",
     ]:
         _execute_ddl(statement)
 

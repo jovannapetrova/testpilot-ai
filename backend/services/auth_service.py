@@ -37,13 +37,15 @@ def normalize_email(email: str) -> str:
 
 
 def create_token(user: User, token_type: str, expires_delta: timedelta) -> str:
-    expires_at = datetime.now(timezone.utc) + expires_delta
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + expires_delta
     payload: dict[str, Any] = {
         "sub": user.id,
         "email": user.email,
         "type": token_type,
         "exp": expires_at,
-        "iat": datetime.now(timezone.utc),
+        "iat": issued_at,
+        "issued_at": issued_at.timestamp(),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -56,12 +58,34 @@ def create_refresh_token(user: User) -> str:
     return create_token(user, "refresh", timedelta(days=REFRESH_TOKEN_DAYS))
 
 
-def create_one_time_token() -> str:
-    return secrets.token_urlsafe(48)
+def create_verification_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def hash_one_time_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def hash_reset_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc)
+    return None
+
+
+def token_is_current_for_user(payload: dict[str, Any], user: User) -> bool:
+    password_changed_at = _as_utc_datetime(getattr(user, "password_changed_at", None))
+    if not password_changed_at:
+        return True
+
+    issued_at = _as_utc_datetime(payload.get("issued_at", payload.get("iat")))
+    if not issued_at:
+        return False
+
+    return issued_at >= password_changed_at
 
 
 def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
@@ -95,6 +119,13 @@ def get_current_user(
         raise_api_error(
             "AUTH_REQUIRED",
             "User account is not available.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not token_is_current_for_user(payload, user):
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "Your password was changed. Please sign in again.",
             status.HTTP_401_UNAUTHORIZED,
         )
 

@@ -5,8 +5,6 @@ import Documentation from "../pages/Documentation.jsx";
 import Login from "../pages/Login.jsx";
 import Register from "../pages/Register.jsx";
 import ForgotPassword from "../pages/ForgotPassword.jsx";
-import ResetPassword from "../pages/ResetPassword.jsx";
-import MagicLink from "../pages/MagicLink.jsx";
 import Dashboard from "../pages/Dashboard.jsx";
 import Projects from "../pages/Projects.jsx";
 import Agents from "../pages/Agents.jsx";
@@ -37,8 +35,6 @@ export default function AppRoutes() {
       <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
       <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
       <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
-      <Route path="/reset-password" element={<PublicOnly><ResetPassword /></PublicOnly>} />
-      <Route path="/magic-link" element={<PublicOnly><MagicLink /></PublicOnly>} />
 
       <Route element={<ProtectedRoute />}>
         <Route path="/dashboard" element={<Dashboard />} />

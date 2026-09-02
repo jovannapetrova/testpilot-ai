@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Loader2, Mail, ShieldCheck } from "lucide-react";
-import { requestMagicLink } from "../api/client";
+import { Loader2, ShieldCheck } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
@@ -11,7 +10,6 @@ export default function Login() {
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState("info");
   const [loading, setLoading] = useState(false);
-  const [magicLoading, setMagicLoading] = useState(false);
   const [slowLogin, setSlowLogin] = useState(false);
   const slowLoginTimer = useRef(null);
 
@@ -34,27 +32,6 @@ export default function Login() {
     } finally {
       clearTimeout(slowLoginTimer.current);
       setLoading(false);
-    }
-  };
-
-  const handleMagicLink = async () => {
-    if (!form.email) {
-      setMessageTone("error");
-      setMessage("Enter your email first, then request a sign-in link.");
-      return;
-    }
-
-    try {
-      setMagicLoading(true);
-      setMessage("");
-      const result = await requestMagicLink({ email: form.email });
-      setMessageTone(result.delivery_configured ? "success" : "info");
-      setMessage(result.message || "If this account exists, a sign-in link will be sent.");
-    } catch (error) {
-      setMessageTone("error");
-      setMessage(error.userMessage || "Unable to request a sign-in link right now.");
-    } finally {
-      setMagicLoading(false);
     }
   };
 
@@ -123,24 +100,6 @@ export default function Login() {
             )}
           </button>
 
-          <button
-            type="button"
-            className="btn btn-ghost auth-submit"
-            onClick={handleMagicLink}
-            disabled={loading || magicLoading}
-          >
-            {magicLoading ? (
-              <>
-                <Loader2 className="spin" size={17} />
-                Sending link...
-              </>
-            ) : (
-              <>
-                <Mail size={17} />
-                Email me a sign-in link
-              </>
-            )}
-          </button>
         </form>
 
         <p className="auth-switch">

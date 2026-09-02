@@ -87,18 +87,13 @@ export async function requestPasswordReset(email) {
   return response.data;
 }
 
+export async function verifyResetCode(payload) {
+  const response = await api.post("/auth/verify-reset-code", payload);
+  return response.data;
+}
+
 export async function resetPassword(payload) {
   const response = await api.post("/auth/reset-password", payload);
-  return response.data;
-}
-
-export async function requestMagicLink(payload) {
-  const response = await api.post("/auth/magic-link/request", payload);
-  return response.data;
-}
-
-export async function verifyMagicLink(token) {
-  const response = await api.post("/auth/magic-link/verify", { token });
   return response.data;
 }
 
