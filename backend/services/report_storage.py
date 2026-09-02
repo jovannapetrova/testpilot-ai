@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import logging
+import shutil
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,8 +22,19 @@ from sqlalchemy.orm import Session
 from models.database import Project, Report
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
 REPORTS_DIR = BASE_DIR / "storage" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger("testpilot.report_storage")
+
+ACTIVE_ANALYSIS_STATUSES = {"queued", "running"}
+
+
+class ActiveAnalysisDeletionError(Exception):
+    def __init__(self, project_id: str, project_status: str):
+        self.project_id = project_id
+        self.project_status = project_status
+        super().__init__(f"Analysis {project_id} is {project_status}.")
 
 
 def _report_metadata(report_data: dict, json_path: Path | None = None, pdf_path: Path | None = None) -> dict:
@@ -232,7 +245,12 @@ def _db_report_metadata(report: Report) -> dict:
 
 def list_reports(user_id: str | None = None, db: Session | None = None) -> list[dict]:
     if db and user_id:
-        reports = db.query(Report).filter(Report.user_id == user_id).order_by(Report.created_at.desc()).all()
+        reports = (
+            db.query(Report)
+            .filter(Report.user_id == user_id, Report.status == "completed")
+            .order_by(Report.created_at.desc())
+            .all()
+        )
         return [_db_report_metadata(report) for report in reports]
 
     reports = []
@@ -244,15 +262,25 @@ def list_reports(user_id: str | None = None, db: Session | None = None) -> list[
         except Exception:
             continue
 
-    return sorted(reports, key=lambda x: x.get("created_at", ""), reverse=True)
+    completed_reports = [report for report in reports if report.get("status") == "completed"]
+    return sorted(completed_reports, key=lambda x: x.get("created_at", ""), reverse=True)
 
 
-def load_report(project_id: str, user_id: str | None = None, db: Session | None = None) -> dict | None:
+def load_report(
+    project_id: str,
+    user_id: str | None = None,
+    db: Session | None = None,
+    *,
+    completed_only: bool = True,
+) -> dict | None:
     if db and user_id:
-        report = db.query(Report).filter(
+        query = db.query(Report).filter(
             Report.project_id == project_id,
             Report.user_id == user_id,
-        ).first()
+        )
+        if completed_only:
+            query = query.filter(Report.status == "completed")
+        report = query.first()
         if not report:
             return None
         return json.loads(report.report_json)
@@ -281,17 +309,113 @@ def get_report_record(project_id: str, user_id: str, db: Session) -> Report | No
     ).first()
 
 
-def delete_report_record(project_id: str, user_id: str, db: Session) -> bool:
-    report = get_report_record(project_id, user_id, db)
-    if not report:
-        return False
+def get_completed_report_record(project_id: str, user_id: str, db: Session) -> Report | None:
+    return db.query(Report).filter(
+        Report.project_id == project_id,
+        Report.user_id == user_id,
+        Report.status == "completed",
+    ).first()
 
-    db.delete(report)
+
+def remove_project_artifacts(project_id: str) -> None:
+    targets = [
+        UPLOAD_DIR / project_id,
+        REPORTS_DIR / project_id,
+        REPORTS_DIR / f"{project_id}_report.json",
+        REPORTS_DIR / f"{project_id}_report.pdf",
+    ]
+    allowed_roots = [UPLOAD_DIR.resolve(), REPORTS_DIR.resolve()]
+
+    for target in targets:
+        try:
+            resolved = target.resolve()
+            if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+                continue
+            if resolved.is_dir():
+                shutil.rmtree(resolved)
+            elif resolved.exists():
+                resolved.unlink()
+        except Exception:
+            logger.exception("Failed to remove stored artifacts for project %s.", project_id)
+
+
+def delete_project_analysis(
+    project_id: str,
+    user_id: str,
+    db: Session,
+    *,
+    require_completed_report: bool = False,
+    protect_active: bool = True,
+) -> dict | None:
     project = db.get(Project, project_id)
-    if project and project.user_id == user_id:
+    if not project or project.user_id != user_id:
+        return None
+
+    if protect_active and project.status in ACTIVE_ANALYSIS_STATUSES:
+        raise ActiveAnalysisDeletionError(project_id, project.status)
+
+    completed_report = get_completed_report_record(project_id, user_id, db)
+    if require_completed_report and not completed_report:
+        return None
+
+    deleted_status = project.status
+    deleted_reports = db.query(Report).filter(
+        Report.project_id == project_id,
+        Report.user_id == user_id,
+    ).count()
+
+    try:
         db.delete(project)
-    db.commit()
-    return True
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    remove_project_artifacts(project_id)
+    return {
+        "project_id": project_id,
+        "status": deleted_status,
+        "deleted_reports": deleted_reports,
+    }
+
+
+def delete_completed_report_projects(user_id: str, db: Session) -> dict:
+    projects = (
+        db.query(Project)
+        .join(Report, Report.project_id == Project.id)
+        .filter(
+            Project.user_id == user_id,
+            Report.user_id == user_id,
+            Report.status == "completed",
+        )
+        .all()
+    )
+    project_ids = [project.id for project in projects]
+    deleted_reports = sum(
+        len([report for report in project.reports if report.user_id == user_id])
+        for project in projects
+    )
+
+    try:
+        for project in projects:
+            db.delete(project)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    for project_id in project_ids:
+        remove_project_artifacts(project_id)
+
+    return {
+        "deleted_projects": len(project_ids),
+        "deleted_reports": deleted_reports,
+        "project_ids": project_ids,
+    }
+
+
+def delete_report_record(project_id: str, user_id: str, db: Session) -> bool:
+    return bool(delete_project_analysis(project_id, user_id, db, require_completed_report=True))
 
 
 def group_findings(findings: list[dict]) -> list[dict]:

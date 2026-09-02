@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -44,7 +44,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  const loadDashboard = async () => {
+  const loadDashboard = useCallback(async () => {
     setLoading(true);
 
     try {
@@ -69,17 +69,23 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadDashboard();
+
+    const handleDataChange = () => loadDashboard();
+    window.addEventListener("testpilot:data-changed", handleDataChange);
 
     const timer = setInterval(() => {
       loadDashboard();
     }, 15000);
 
-    return () => clearInterval(timer);
-  }, []);
+    return () => {
+      window.removeEventListener("testpilot:data-changed", handleDataChange);
+      clearInterval(timer);
+    };
+  }, [loadDashboard]);
 
   const latest = useMemo(() => summary?.latest_reports || [], [summary]);
 

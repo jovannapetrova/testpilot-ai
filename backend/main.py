@@ -31,7 +31,7 @@ from models.schemas import (
     UpdateProfileRequest,
     VerifyResetCodeRequest,
 )
-from services.analysis_progress import AGENT_ORDER, get_progress, start_analysis, fail_analysis
+from services.analysis_progress import AGENT_ORDER, forget_analysis, get_progress, start_analysis, fail_analysis
 from services.api_errors import (
     http_exception_handler,
     raise_api_error,
@@ -56,8 +56,10 @@ from services.email_service import (
     send_password_reset_code_email,
 )
 from services.report_storage import (
-    REPORTS_DIR,
+    ActiveAnalysisDeletionError,
     build_markdown_report,
+    delete_completed_report_projects,
+    delete_project_analysis,
     delete_report_record,
     generate_pdf_report,
     get_report_record,
@@ -297,28 +299,15 @@ def owned_report_or_404(project_id: str, user_id: str, db: Session):
     record = get_report_record(project_id, user_id, db)
     if not record:
         raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
+    if record.status != "completed":
+        raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
     return record
 
 
 def remove_owned_project_artifacts(project_id: str) -> None:
-    targets = [
-        UPLOAD_DIR / project_id,
-        REPORTS_DIR / project_id,
-        REPORTS_DIR / f"{project_id}_report.json",
-        REPORTS_DIR / f"{project_id}_report.pdf",
-    ]
-    for target in targets:
-        try:
-            resolved = target.resolve()
-            allowed_roots = [UPLOAD_DIR.resolve(), REPORTS_DIR.resolve()]
-            if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
-                continue
-            if resolved.is_dir():
-                shutil.rmtree(resolved)
-            elif resolved.exists():
-                resolved.unlink()
-        except Exception:
-            logger.exception("Failed to remove owned artifact for project %s.", project_id)
+    from services.report_storage import remove_project_artifacts
+
+    remove_project_artifacts(project_id)
 
 
 def _token_expired(value) -> bool:
@@ -931,6 +920,32 @@ def get_projects(
     return {"success": True, "projects": [project_summary(project) for project in projects]}
 
 
+@app.delete("/projects/{project_id}", tags=["Projects"], summary="Delete one owned completed or failed analysis")
+def delete_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = delete_project_analysis(project_id, current_user.id, db)
+    except ActiveAnalysisDeletionError:
+        raise_api_error(
+            "ANALYSIS_ACTIVE",
+            "This analysis is still queued or running. Wait for it to finish before deleting it.",
+            status.HTTP_409_CONFLICT,
+        )
+
+    if not result:
+        raise_api_error("NOT_FOUND", "Analysis not found.", status.HTTP_404_NOT_FOUND)
+
+    forget_analysis(project_id)
+    return {
+        "success": True,
+        "message": "Analysis deleted successfully.",
+        **result,
+    }
+
+
 @app.get("/reports", tags=["Reports"], summary="List current user's persisted reports")
 def get_reports(
     search: str | None = None,
@@ -940,6 +955,8 @@ def get_reports(
     db: Session = Depends(get_db),
 ):
     reports = list_reports(user_id=current_user.id, db=db)
+    if status_filter and status_filter != "completed":
+        reports = []
     if search:
         needle = search.lower()
         reports = [
@@ -1305,12 +1322,17 @@ def delete_report(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = db.get(Project, project_id)
-    if not project or project.user_id != current_user.id:
-        raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
+    try:
+        deleted = delete_report_record(project_id, current_user.id, db)
+    except ActiveAnalysisDeletionError:
+        raise_api_error(
+            "ANALYSIS_ACTIVE",
+            "This analysis is still queued or running. Wait for it to finish before deleting it.",
+            status.HTTP_409_CONFLICT,
+        )
 
-    if delete_report_record(project_id, current_user.id, db):
-        remove_owned_project_artifacts(project_id)
+    if deleted:
+        forget_analysis(project_id)
         return {
             "success": True,
             "message": "Report deleted successfully.",
@@ -1320,22 +1342,20 @@ def delete_report(
     raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
 
 
-@app.delete("/reports", tags=["Reports"], summary="Delete all current user's reports and projects")
+@app.delete("/reports", tags=["Reports"], summary="Delete all current user's completed reports and linked analyses")
 def clear_reports(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    reports = db.query(Project).filter(Project.user_id == current_user.id).all()
-    owned_project_ids = [project.id for project in reports]
-    for project in reports:
-        db.delete(project)
-    db.commit()
-    for project_id in owned_project_ids:
-        remove_owned_project_artifacts(project_id)
+    result = delete_completed_report_projects(current_user.id, db)
+    for project_id in result["project_ids"]:
+        forget_analysis(project_id)
 
     return {
         "success": True,
-        "message": "All reports cleared successfully.",
+        "message": "All completed reports cleared successfully.",
+        "deleted_projects": result["deleted_projects"],
+        "deleted_reports": result["deleted_reports"],
     }
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileArchive, GitBranch, PackageOpen, RefreshCw, Search } from "lucide-react";
+import { FileArchive, GitBranch, PackageOpen, RefreshCw, Search, Trash2 } from "lucide-react";
 
 import UploadPanel from "../components/projects/UploadPanel";
 import GithubPanel from "../components/projects/GithubPanel";
@@ -8,8 +8,10 @@ import AnalysisResultPanel from "../components/analysis/AnalysisResultPanel";
 import EmptyState from "../components/ui/EmptyState";
 import ErrorState from "../components/ui/ErrorState";
 import Skeleton from "../components/ui/Skeleton";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
+import Toast from "../components/ui/Toast";
 
-import { getProjects, getReport } from "../api/client";
+import { deleteProjectAnalysis, getProjects, getReport } from "../api/client";
 
 function displayLanguage(value) {
   if (!value) return "Unknown";
@@ -48,6 +50,10 @@ export default function Projects() {
   const [loadingReport, setLoadingReport] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [deletingProjectId, setDeletingProjectId] = useState("");
+  const [toast, setToast] = useState("");
+  const [toastTone, setToastTone] = useState("success");
 
   const filteredProjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -107,6 +113,39 @@ export default function Projects() {
       setError(err.userMessage || "This completed project does not have an available report.");
     } finally {
       setLoadingReport(false);
+    }
+  };
+
+  const showToast = (message, tone = "success") => {
+    setToastTone(tone);
+    setToast(message);
+  };
+
+  const requestDeleteProject = (project) => {
+    if (["queued", "running"].includes(project.status)) return;
+    setConfirmDelete(project);
+  };
+
+  const runDeleteProject = async () => {
+    if (!confirmDelete) return;
+
+    try {
+      setDeletingProjectId(confirmDelete.id);
+      setError("");
+      await deleteProjectAnalysis(confirmDelete.id);
+      setProjects((current) => current.filter((project) => project.id !== confirmDelete.id));
+      if (selectedProjectId === confirmDelete.id) {
+        setSelectedProjectId("");
+        setSelectedReport(null);
+        setNotice("");
+      }
+      window.dispatchEvent(new Event("testpilot:data-changed"));
+      showToast("Analysis deleted.");
+    } catch (err) {
+      showToast(err.userMessage || "Unable to delete this analysis right now.", "error");
+    } finally {
+      setDeletingProjectId("");
+      setConfirmDelete(null);
     }
   };
 
@@ -198,16 +237,35 @@ export default function Projects() {
         <Skeleton rows={4} />
       ) : (
         <div className="grid-4 project-grid">
-          {filteredProjects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              className={`project-card-button ${selectedProjectId === project.id ? "active" : ""}`}
-              onClick={() => openProject(project)}
-            >
-              <ProjectCard project={project} />
-            </button>
-          ))}
+          {filteredProjects.map((project) => {
+            const active = ["queued", "running"].includes(project.status);
+            const deleting = deletingProjectId === project.id;
+            return (
+              <div className="project-card-shell" key={project.id}>
+                <button
+                  type="button"
+                  className={`project-card-button ${selectedProjectId === project.id ? "active" : ""}`}
+                  onClick={() => openProject(project)}
+                >
+                  <ProjectCard project={project} />
+                </button>
+                <button
+                  type="button"
+                  className="project-delete-button"
+                  onClick={() => requestDeleteProject(project)}
+                  disabled={active || deleting}
+                  title={
+                    active
+                      ? "Analysis is queued or running. Delete is available after it finishes."
+                      : "Delete analysis"
+                  }
+                  aria-label={`Delete analysis ${project.name}`}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -230,6 +288,19 @@ export default function Projects() {
           <AnalysisResultPanel report={selectedReport} />
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete this analysis?"
+        message="This will permanently remove this analysis and any associated report data."
+        confirmLabel="Delete analysis"
+        danger
+        loading={Boolean(deletingProjectId)}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={runDeleteProject}
+      />
+
+      <Toast message={toast} tone={toastTone} onClose={() => setToast("")} />
     </>
   );
 }

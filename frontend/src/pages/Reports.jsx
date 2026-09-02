@@ -87,7 +87,7 @@ export default function Reports() {
       kind: "one",
       projectId,
       title: "Delete this report?",
-      message: "This removes the stored report and generated exports for this project.",
+      message: "This removes the completed report, generated exports and linked analysis record.",
       confirmLabel: "Delete report",
     });
   };
@@ -95,9 +95,9 @@ export default function Reports() {
   const confirmClearAll = () => {
     setConfirm({
       kind: "all",
-      title: "Delete all reports?",
-      message: "This removes all of your stored reports and generated exports. Projects tied to those reports are also removed.",
-      confirmLabel: "Delete all reports",
+      title: "Clear all completed reports?",
+      message: "This removes completed reports, generated exports and linked completed analysis records. Failed analyses stay in Project Archive until deleted there.",
+      confirmLabel: "Clear completed reports",
     });
   };
 
@@ -108,7 +108,7 @@ export default function Reports() {
       setDeleting(true);
       if (confirm.kind === "all") {
         await clearReports();
-        showToast("All reports deleted.");
+        showToast("Completed reports cleared.");
       } else {
         await deleteReport(confirm.projectId);
         showToast("Report deleted.");
@@ -126,6 +126,12 @@ export default function Reports() {
   useEffect(() => {
     const timer = setTimeout(() => loadReports(), 250);
     return () => clearTimeout(timer);
+  }, [loadReports]);
+
+  useEffect(() => {
+    const handleDataChange = () => loadReports();
+    window.addEventListener("testpilot:data-changed", handleDataChange);
+    return () => window.removeEventListener("testpilot:data-changed", handleDataChange);
   }, [loadReports]);
 
   return (
@@ -171,7 +177,6 @@ export default function Reports() {
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           <option value="all">All statuses</option>
           <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
         </select>
         <select value={sort} onChange={(event) => setSort(event.target.value)}>
           <option value="newest">Newest first</option>

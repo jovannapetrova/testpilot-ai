@@ -200,6 +200,10 @@
   margin-top: 14px;
 }
 
+.project-card-shell {
+  position: relative;
+}
+
 .project-card {
   min-height: 210px;
   display: grid;
@@ -260,6 +264,34 @@
 
 .project-card-footer strong {
   color: var(--text);
+}
+
+.project-delete-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.project-delete-button:hover:not(:disabled),
+.project-delete-button:focus-visible:not(:disabled) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 38%, var(--line));
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
+}
+
+.project-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .project-notice,

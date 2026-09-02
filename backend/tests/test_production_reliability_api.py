@@ -13,9 +13,11 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-secret"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from main import app, mark_stale_analysis_jobs  # noqa: E402
+from main import UPLOAD_DIR, app, mark_stale_analysis_jobs  # noqa: E402
 from models.database import PasswordResetToken, Project, Report, utc_now  # noqa: E402
+from services.analysis_progress import get_progress, start_analysis  # noqa: E402
 from services.database import SessionLocal, init_db  # noqa: E402
+from services.report_storage import REPORTS_DIR  # noqa: E402
 
 client = TestClient(app)
 
@@ -88,6 +90,26 @@ def _insert_report(user_id: str, project_id: str, project_name: str, score: int 
                 report_json=json.dumps(_report_payload(project_id, project_name, score)),
                 pdf_blob=b"%PDF-1.4\n%test\n",
                 markdown_text="# Test",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_project(user_id: str, project_id: str, project_name: str, project_status: str) -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            Project(
+                id=project_id,
+                user_id=user_id,
+                name=project_name,
+                source_type="upload",
+                status=project_status,
+                progress=99 if project_status == "failed" else 40,
+                current_stage="Analysis failed" if project_status == "failed" else "Security Agent",
+                error="Static analysis failed." if project_status == "failed" else None,
             )
         )
         db.commit()
@@ -371,6 +393,140 @@ def test_report_download_delete_and_compare_are_user_scoped():
 
     owner_report = client.get(f"/reports/{project_a}", headers=_auth_headers(user_a))
     assert owner_report.status_code == 200
+
+
+def test_project_archive_deletes_failed_analysis_and_artifacts():
+    user = _register("delete-failed-analysis")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_project(user["user"]["id"], project_id, "Failed Analysis", "failed")
+
+    upload_artifact = UPLOAD_DIR / project_id
+    report_artifact = REPORTS_DIR / project_id
+    upload_artifact.mkdir(parents=True, exist_ok=True)
+    report_artifact.mkdir(parents=True, exist_ok=True)
+    (upload_artifact / "temp.txt").write_text("temporary", encoding="utf-8")
+    (report_artifact / "metadata.json").write_text("{}", encoding="utf-8")
+
+    response = client.delete(f"/projects/{project_id}", headers=_auth_headers(user))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["deleted_reports"] == 0
+    assert not upload_artifact.exists()
+    assert not report_artifact.exists()
+
+    db = SessionLocal()
+    try:
+        assert db.get(Project, project_id) is None
+        assert db.query(Report).filter(Report.project_id == project_id).first() is None
+    finally:
+        db.close()
+
+
+def test_project_archive_deletes_completed_analysis_and_associated_report():
+    user = _register("delete-completed-analysis")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_report(user["user"]["id"], project_id, "Completed Analysis", 82)
+
+    response = client.delete(f"/projects/{project_id}", headers=_auth_headers(user))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["deleted_reports"] == 1
+    assert client.get(f"/reports/{project_id}", headers=_auth_headers(user)).status_code == 404
+
+    projects = client.get("/projects", headers=_auth_headers(user)).json()["projects"]
+    reports = client.get("/reports", headers=_auth_headers(user)).json()["reports"]
+    assert project_id not in [project["project_id"] for project in projects]
+    assert project_id not in [report["project_id"] for report in reports]
+
+
+def test_report_delete_removes_linked_completed_project():
+    user = _register("delete-report-project")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_report(user["user"]["id"], project_id, "Completed Report", 84)
+
+    response = client.delete(f"/reports/{project_id}", headers=_auth_headers(user))
+
+    assert response.status_code == 200
+    assert client.get(f"/reports/{project_id}", headers=_auth_headers(user)).status_code == 404
+    projects = client.get("/projects", headers=_auth_headers(user)).json()["projects"]
+    assert project_id not in [project["project_id"] for project in projects]
+
+
+def test_project_delete_is_user_scoped_and_handles_missing_ids():
+    owner = _register("analysis-owner")
+    intruder = _register("analysis-intruder")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_project(owner["user"]["id"], project_id, "Private Failed Analysis", "failed")
+
+    forbidden = client.delete(f"/projects/{project_id}", headers=_auth_headers(intruder))
+    missing = client.delete(f"/projects/project-{uuid4().hex[:8]}", headers=_auth_headers(owner))
+
+    assert forbidden.status_code == 404
+    assert missing.status_code == 404
+    projects = client.get("/projects", headers=_auth_headers(owner)).json()["projects"]
+    assert project_id in [project["project_id"] for project in projects]
+
+
+def test_running_analysis_delete_is_protected_and_progress_remains():
+    user = _register("delete-running")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_project(user["user"]["id"], project_id, "Running Analysis", "running")
+    start_analysis(project_id, "Running Analysis")
+
+    response = client.delete(f"/projects/{project_id}", headers=_auth_headers(user))
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ANALYSIS_ACTIVE"
+    assert get_progress(project_id) is not None
+    projects = client.get("/projects", headers=_auth_headers(user)).json()["projects"]
+    assert project_id in [project["project_id"] for project in projects]
+
+
+def test_reports_clear_all_deletes_completed_reports_but_keeps_failed_analyses():
+    user = _register("clear-completed")
+    completed_id = f"project-{uuid4().hex[:8]}"
+    failed_id = f"project-{uuid4().hex[:8]}"
+    _insert_report(user["user"]["id"], completed_id, "Completed To Clear", 79)
+    _insert_project(user["user"]["id"], failed_id, "Failed To Keep", "failed")
+    db = SessionLocal()
+    try:
+        db.add(
+            Report(
+                project_id=failed_id,
+                user_id=user["user"]["id"],
+                project_name="Failed To Keep",
+                status="failed",
+                language="Python",
+                overall_score=0,
+                quality_score=0,
+                security_score=0,
+                test_score=0,
+                report_json=json.dumps(_report_payload(failed_id, "Failed To Keep", 0) | {"status": "failed"}),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.delete("/reports", headers=_auth_headers(user))
+
+    assert response.status_code == 200
+    assert response.json()["deleted_reports"] == 1
+    assert client.get("/reports", headers=_auth_headers(user)).json()["reports"] == []
+
+    projects = client.get("/projects", headers=_auth_headers(user)).json()["projects"]
+    project_ids = [project["project_id"] for project in projects]
+    assert completed_id not in project_ids
+    assert failed_id in project_ids
+    db = SessionLocal()
+    try:
+        failed_report = db.query(Report).filter(Report.project_id == failed_id).first()
+        assert failed_report is not None
+        assert failed_report.status == "failed"
+    finally:
+        db.close()
 
 
 def test_report_comparison_includes_directional_metric_summaries():

@@ -152,6 +152,11 @@ export async function getProjects(params = {}) {
   return response.data;
 }
 
+export async function deleteProjectAnalysis(projectId) {
+  const response = await api.delete(`/projects/${projectId}`);
+  return response.data;
+}
+
 export async function getReport(projectId) {
   const response = await api.get(`/reports/${projectId}`);
   return response.data;

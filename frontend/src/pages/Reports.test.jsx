@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Reports from "./Reports";
 import { renderWithRouter } from "../test/test-utils";
-import { deleteReport, getReports } from "../api/client";
+import { clearReports, deleteReport, getReports } from "../api/client";
 
 vi.mock("../api/client", () => ({
   clearReports: vi.fn(),
@@ -46,5 +46,27 @@ describe("Reports", () => {
     fireEvent.click(deleteButtons[deleteButtons.length - 1]);
 
     await waitFor(() => expect(deleteReport).toHaveBeenCalledWith("one"));
+  });
+
+  it("clarifies that Clear All removes completed reports only", async () => {
+    getReports
+      .mockResolvedValueOnce({
+        reports: [{ project_id: "one", project_name: "Billing API", created_at: new Date().toISOString(), overall_score: 90, quality_score: 91, security_score: 92, test_score: 88 }],
+      })
+      .mockResolvedValueOnce({ reports: [] });
+    clearReports.mockResolvedValueOnce({ success: true, deleted_reports: 1 });
+
+    renderWithRouter(<Reports />);
+
+    expect(await screen.findAllByText("Billing API")).not.toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: /clear all/i }));
+
+    expect(screen.getByText("Clear all completed reports?")).toBeInTheDocument();
+    expect(screen.getByText(/Failed analyses stay in Project Archive/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /clear completed reports/i }));
+
+    await waitFor(() => expect(clearReports).toHaveBeenCalled());
+    expect(screen.getByText("Completed reports cleared.")).toBeInTheDocument();
   });
 });

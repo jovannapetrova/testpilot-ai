@@ -146,3 +146,8 @@ def get_progress(project_id: str) -> dict | None:
             **item,
             "agents": [dict(agent) for agent in item["agents"]],
         }
+
+
+def forget_analysis(project_id: str) -> None:
+    with _LOCK:
+        _PROGRESS.pop(project_id, None)
