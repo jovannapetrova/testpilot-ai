@@ -21,9 +21,25 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: CORS_ORIGINS
-        value: http://localhost:5173,http://127.0.0.1:5173
+        sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: "https://.*\\.vercel\\.app"
       - key: ENABLE_TEST_EXECUTION
         value: "false"
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: PASSWORD_RESET_TOKEN_MINUTES
+        value: "30"
+      - key: MAGIC_LINK_TOKEN_MINUTES
+        value: "15"
+      - key: AUTH_DEBUG_TOKENS
+        value: "false"
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "50"
+      - key: MAX_EXTRACTED_SIZE_MB
+        value: "150"
+      - key: MAX_ARCHIVE_FILES
+        value: "5000"
 
 databases:
   - name: testpilot-ai-db

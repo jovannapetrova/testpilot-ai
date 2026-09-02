@@ -99,6 +99,7 @@
   background: transparent;
   cursor: pointer;
   font-weight: 800;
+  border: 0;
 }
 
 .auth-message {
@@ -107,6 +108,20 @@
   background: rgba(37, 99, 235, 0.08);
   border: 1px solid rgba(37, 99, 235, 0.16);
   border-radius: 10px;
+}
+
+.auth-message-error {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
+}
+
+.auth-debug-token {
+  margin-top: 10px;
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .auth-submit {

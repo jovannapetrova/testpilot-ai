@@ -3,7 +3,6 @@ export default function ProjectIntelligencePanel({ intelligence }) {
 
   return (
     <div className="project-intelligence-panel">
-      <h4>Project Intelligence</h4>
       <p>{intelligence.summary}</p>
 
       <div className="intelligence-grid">
@@ -29,7 +28,7 @@ export default function ProjectIntelligencePanel({ intelligence }) {
           <ul>{intelligence.strengths?.map((item) => <li key={item}>{item}</li>)}</ul>
         </div>
         <div>
-          <h5>Risks</h5>
+          <h5>Considerations</h5>
           <ul>{intelligence.risks?.map((item) => <li key={item}>{item}</li>)}</ul>
         </div>
       </div>

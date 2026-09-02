@@ -13,6 +13,9 @@ dist/
 .env.local
 
 # Storage
+backend/storage/*.db
+backend/storage/*.sqlite
+backend/storage/*.sqlite3
 backend/storage/uploads/*
 backend/storage/workspaces/*
 backend/storage/reports/*

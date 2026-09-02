@@ -1,6 +1,7 @@
 def build_project_intelligence(project_profile: dict, dependency_profile: dict) -> dict:
     frameworks = project_profile.get("frameworks", [])
     primary_language = project_profile.get("primary_language", "unknown")
+    project_category = project_profile.get("project_category")
 
     strengths = []
     risks = []
@@ -15,12 +16,14 @@ def build_project_intelligence(project_profile: dict, dependency_profile: dict) 
     else:
         risks.append("No explicit test files were detected.")
 
+    docker_relevant = project_category in {"web_api", "backend_service", "graphql_api", "data_ml"}
     if project_profile.get("has_docker"):
         strengths.append("Docker configuration detected.")
-    else:
+    elif docker_relevant:
         risks.append("Docker configuration was not detected.")
 
     dependency_count = dependency_profile.get("total_dependencies", 0)
+    dependency_health = dependency_profile.get("dependency_health", {})
     repository_shape = project_profile.get("repository_shape", {})
     entrypoints = project_profile.get("entrypoints", [])
 
@@ -30,6 +33,10 @@ def build_project_intelligence(project_profile: dict, dependency_profile: dict) 
         strengths.append("Dependency footprint is small.")
     else:
         risks.append("Dependency footprint should be reviewed.")
+
+    for factor in dependency_health.get("risk_factors", [])[:3]:
+        if factor not in risks:
+            risks.append(factor)
 
     if repository_shape.get("has_ci"):
         strengths.append("CI workflow configuration detected.")
@@ -53,6 +60,7 @@ def build_project_intelligence(project_profile: dict, dependency_profile: dict) 
         "dependency_count": dependency_count,
         "dependency_files": dependency_profile.get("dependency_files", []),
         "dependency_risk_level": dependency_profile.get("risk_level", "Unknown"),
+        "dependency_health": dependency_health,
         "repository_shape": repository_shape,
         "entrypoints": entrypoints,
         "architecture_signals": {

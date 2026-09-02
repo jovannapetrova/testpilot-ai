@@ -14,8 +14,7 @@ export default function UploadPanel({ onAnalysisComplete }) {
 
   const handleChoose = () => inputRef.current?.click();
 
-  const handleFileChange = (event) => {
-    const file = event.target.files?.[0];
+  const acceptFile = (file) => {
     if (!file) return;
 
     if (!file.name.endsWith(".zip")) {
@@ -31,6 +30,15 @@ export default function UploadPanel({ onAnalysisComplete }) {
     setMessage(`${file.name} selected`);
     setSummary(null);
     setAnalysisReport(null);
+  };
+
+  const handleFileChange = (event) => {
+    acceptFile(event.target.files?.[0]);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    acceptFile(event.dataTransfer.files?.[0]);
   };
 
   const handleUpload = async () => {
@@ -99,7 +107,11 @@ export default function UploadPanel({ onAnalysisComplete }) {
         </div>
       </div>
 
-      <div className={`upload-area ${status}`}>
+      <div
+        className={`upload-area ${status}`}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+      >
         {status === "uploading" ? (
           <Loader2 className="spin" size={48} />
         ) : status === "success" ? (
@@ -118,8 +130,19 @@ export default function UploadPanel({ onAnalysisComplete }) {
             Choose ZIP
           </button>
 
-          <button className="btn btn-primary" onClick={handleUpload}>
-            Upload Project
+          <button
+            className="btn btn-primary"
+            onClick={handleUpload}
+            disabled={status === "uploading" || analysisStatus === "running"}
+          >
+            {status === "uploading" ? (
+              <>
+                <Loader2 className="spin" size={17} />
+                Uploading...
+              </>
+            ) : (
+              "Upload Project"
+            )}
           </button>
         </div>
 

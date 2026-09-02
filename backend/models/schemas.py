@@ -1,7 +1,26 @@
 from __future__ import annotations
 from enum import Enum
+import re
 from typing import Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def validate_email(value: str) -> str:
+    email = str(value or "").strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        raise ValueError("Enter a valid email address.")
+    return email
+
+
+def validate_password(value: str) -> str:
+    password = str(value or "")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+    if len(password) > 128:
+        raise ValueError("Password must be 128 characters or fewer.")
+    return password
 
 class AgentStatus(str, Enum):
     pending = "pending"
@@ -86,6 +105,10 @@ class GeneratedTest(BaseModel):
     assertion_strength: str = "medium"
     execution_safety: str = "safe"
     generated_test_category: str = "unit"
+    execution_status: str = "not_executed"
+    executed: bool = False
+    passed: int = 0
+    failed: int = 0
 
 class CoverageResult(BaseModel):
     executed: bool = False
@@ -108,6 +131,8 @@ class Recommendation(BaseModel):
     estimated_effort: str = "medium"
     business_impact: str = ""
     why: str = ""
+    affected_files: list[str] = Field(default_factory=list)
+    evidence: str = ""
 
 class AnalysisReport(BaseModel):
     project_id: str
@@ -136,10 +161,25 @@ class RegisterRequest(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=8, max_length=128)
 
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return validate_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def password_must_be_valid(cls, value: str) -> str:
+        return validate_password(value)
+
 class LoginRequest(BaseModel):
     email: str
     password: str
     remember_me: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return validate_email(value)
 
 class RefreshRequest(BaseModel):
     refresh_token: str
@@ -148,9 +188,43 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)
 
+    @field_validator("new_password")
+    @classmethod
+    def new_password_must_be_valid(cls, value: str) -> str:
+        return validate_password(value)
+
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = Field(default=None, min_length=2, max_length=160)
     avatar_url: Optional[str] = Field(default=None, max_length=500)
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return validate_email(value)
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=512)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_must_be_valid(cls, value: str) -> str:
+        return validate_password(value)
+
+class MagicLinkRequest(BaseModel):
+    email: str
+    redirect_url: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("email")
+    @classmethod
+    def email_must_be_valid(cls, value: str) -> str:
+        return validate_email(value)
+
+class MagicLinkVerifyRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=512)
 
 class AuthResponse(BaseModel):
     access_token: str

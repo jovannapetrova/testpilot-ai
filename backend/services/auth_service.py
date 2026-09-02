@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from models.database import User
+from services.api_errors import raise_api_error
 from services.database import get_db
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
@@ -53,19 +56,29 @@ def create_refresh_token(user: User) -> str:
     return create_token(user, "refresh", timedelta(days=REFRESH_TOKEN_DAYS))
 
 
+def create_one_time_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def hash_one_time_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except JWTError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Your session is invalid or expired. Please sign in again.",
-        ) from exc
+    except JWTError:
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "Your session is invalid or expired. Please sign in again.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
 
     if payload.get("type") != expected_type:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid session token type.",
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "Your session is invalid or expired. Please sign in again.",
+            status.HTTP_401_UNAUTHORIZED,
         )
 
     return payload
@@ -79,9 +92,10 @@ def get_current_user(
     user = db.get(User, payload.get("sub"))
 
     if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account is not available.",
+        raise_api_error(
+            "AUTH_REQUIRED",
+            "User account is not available.",
+            status.HTTP_401_UNAUTHORIZED,
         )
 
     return user

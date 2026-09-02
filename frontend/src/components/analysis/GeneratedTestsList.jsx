@@ -1,54 +1,111 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import Toast from "../ui/Toast";
+
+const pageSize = 5;
 
 export default function GeneratedTestsList({ tests = [], metadata = {} }) {
   const humanDesign = metadata.needs_human_test_design || [];
   const skippedReasons = metadata.skipped_generation_reasons || {};
   const [expanded, setExpanded] = useState({});
+  const [page, setPage] = useState(0);
+  const [toast, setToast] = useState("");
+
+  const pageCount = Math.max(1, Math.ceil(tests.length / pageSize));
+  const visibleTests = useMemo(
+    () => tests.slice(page * pageSize, page * pageSize + pageSize),
+    [page, tests],
+  );
 
   if (!tests.length && !humanDesign.length) {
-    return <p className="muted-text">No generated tests available yet.</p>;
+    return <p className="muted-text">No executable generated test candidates were inferred for this report.</p>;
   }
+
+  const toggleAll = (open) => {
+    const next = {};
+    visibleTests.forEach((test, index) => {
+      next[`${test.file}-${page}-${index}`] = open;
+    });
+    setExpanded((current) => ({ ...current, ...next }));
+  };
+
+  const copyTest = async (testCode) => {
+    await navigator.clipboard?.writeText(testCode || "");
+    setToast("Test copied to clipboard.");
+  };
 
   return (
     <div className="detail-list">
-      {tests.slice(0, 5).map((test, index) => (
-        <div className="test-row" key={`${test.file}-${index}`}>
-          <div className="test-row-header">
-            <strong>{test.target}</strong>
-            <div className="test-actions">
-              <button
-                className="copy-code-btn"
-                onClick={() => setExpanded((current) => ({
-                  ...current,
-                  [`${test.file}-${index}`]: !current[`${test.file}-${index}`],
-                }))}
-              >
-                {expanded[`${test.file}-${index}`] ? "Collapse" : "Expand"}
-              </button>
-              <button
-                className="copy-code-btn"
-                onClick={() => navigator.clipboard?.writeText(test.test_code || "")}
-              >
-                Copy
-              </button>
-            </div>
+      {tests.length ? (
+        <div className="test-list-controls">
+          <div className="pagination-controls">
+            <button type="button" className="copy-code-btn" onClick={() => toggleAll(true)}>Expand visible</button>
+            <button type="button" className="copy-code-btn" onClick={() => toggleAll(false)}>Collapse visible</button>
           </div>
-          <p>
-            {test.test_type || "unit"} | confidence: {test.confidence || "medium"}
-            {test.framework ? ` | ${test.framework}` : ""}
-            {` | category: ${test.generated_test_category || test.test_type || "unit"}`}
-            {` | assertions: ${test.assertion_strength || "medium"}`}
-            {` | safety: ${test.execution_safety || "safe"}`}
-            {test.test_type === "smoke" ? " | smoke" : " | executable"}
-          </p>
-          <p>{test.rationale}</p>
-          {expanded[`${test.file}-${index}`] ? (
-            <pre>{test.test_code}</pre>
-          ) : (
-            <div className="code-collapsed">Code collapsed. Expand to inspect generated test source.</div>
-          )}
+          <div className="pagination-controls">
+            <button
+              type="button"
+              className="copy-code-btn"
+              disabled={page === 0}
+              onClick={() => setPage((current) => current - 1)}
+            >
+              Previous
+            </button>
+            <span className="muted-text">Page {page + 1} of {pageCount}</span>
+            <button
+              type="button"
+              className="copy-code-btn"
+              disabled={page + 1 >= pageCount}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Next
+            </button>
+          </div>
         </div>
-      ))}
+      ) : null}
+
+      {visibleTests.map((test, index) => {
+        const key = `${test.file}-${page}-${index}`;
+        return (
+          <div className="test-row" key={key}>
+            <div className="test-row-header">
+              <strong>{test.target}</strong>
+              <div className="test-actions">
+                <button
+                  type="button"
+                  className="copy-code-btn"
+                  onClick={() => setExpanded((current) => ({
+                    ...current,
+                    [key]: !current[key],
+                  }))}
+                >
+                  {expanded[key] ? "Collapse" : "Expand"}
+                </button>
+                <button
+                  type="button"
+                  className="copy-code-btn"
+                  onClick={() => copyTest(test.test_code || "")}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+            <p>
+              {test.test_type || "unit"} | confidence: {test.confidence || "medium"}
+              {test.framework ? ` | ${test.framework}` : ""}
+              {` | category: ${test.generated_test_category || test.test_type || "unit"}`}
+              {` | assertions: ${test.assertion_strength || "medium"}`}
+              {` | safety: ${test.execution_safety || "safe"}`}
+              {test.executed ? ` | executed: ${test.passed || 0} passed, ${test.failed || 0} failed` : " | not executed"}
+            </p>
+            <p>{test.rationale}</p>
+            {expanded[key] ? (
+              <pre>{test.test_code}</pre>
+            ) : (
+              <div className="code-collapsed">Code collapsed. Expand to inspect generated test source.</div>
+            )}
+          </div>
+        );
+      })}
 
       {humanDesign.length ? (
         <div className="detail-row">
@@ -74,6 +131,8 @@ export default function GeneratedTestsList({ tests = [], metadata = {} }) {
           </div>
         </div>
       ) : null}
+
+      <Toast message={toast} onClose={() => setToast("")} />
     </div>
   );
 }

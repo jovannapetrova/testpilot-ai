@@ -28,7 +28,7 @@
   color: var(--muted);
 }
 
-.score-orb {
+.score-panel {
   flex: 0 0 auto;
   min-width: 170px;
   padding: 22px;
@@ -38,14 +38,14 @@
   color: #ffffff;
 }
 
-.score-orb span,
-.score-orb small {
+.score-panel span,
+.score-panel small {
   display: block;
   color: #aab4c4;
   font-weight: 800;
 }
 
-.score-orb strong {
+.score-panel strong {
   display: block;
   margin: 8px 0;
   font-size: 46px;
@@ -140,7 +140,7 @@
     flex-direction: column;
   }
 
-  .score-orb {
+  .score-panel {
     width: 100%;
   }
 }

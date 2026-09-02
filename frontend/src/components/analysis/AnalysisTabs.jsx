@@ -1,11 +1,22 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Bot, ClipboardCheck, Code2, ShieldAlert, WandSparkles } from "lucide-react";
 import SecurityFindingsList from "./SecurityFindingsList";
 import GeneratedTestsList from "./GeneratedTestsList";
 import QualityMetricsList from "./QualityMetricsList";
 import RecommendationList from "./RecommendationList";
 import AgentLogList from "./AgentLogList";
 
-const tabs = ["Security", "Generated Tests", "Quality Metrics", "Recommendations", "Agent Log"];
+const tabs = [
+  { id: "security", label: "Security", icon: ShieldAlert },
+  { id: "tests", label: "Generated Tests", icon: ClipboardCheck },
+  { id: "quality", label: "Code Quality", icon: Code2 },
+  { id: "recommendations", label: "Recommendations", icon: WandSparkles },
+  { id: "agents", label: "AI Agents", icon: Bot },
+];
+
+function severityValue(value) {
+  return String(value || "").split(".").pop().toLowerCase();
+}
 
 function SummaryCards({ active, report, testMetadata }) {
   const findings = report.security_findings || [];
@@ -13,9 +24,9 @@ function SummaryCards({ active, report, testMetadata }) {
   const recommendations = report.recommendations || [];
   const logs = report.agent_logs || [];
 
-  if (active === "Security") {
+  if (active === "security") {
     const grouped = new Set(findings.map((item) => item.fingerprint || `${item.issue}-${item.file}`));
-    const count = (severity) => findings.filter((item) => String(item.severity || "").split(".").pop() === severity).length;
+    const count = (severity) => findings.filter((item) => severityValue(item.severity) === severity).length;
     return (
       <div className="tab-summary-grid">
         <div><span>Critical</span><strong>{count("critical")}</strong></div>
@@ -27,7 +38,7 @@ function SummaryCards({ active, report, testMetadata }) {
     );
   }
 
-  if (active === "Generated Tests") {
+  if (active === "tests") {
     const categories = testMetadata.by_category || {};
     const needsDesign = Array.isArray(testMetadata.needs_human_test_design)
       ? testMetadata.needs_human_test_design.length
@@ -37,12 +48,13 @@ function SummaryCards({ active, report, testMetadata }) {
         <div><span>Executable</span><strong>{testMetadata.executable_tests ?? report.generated_tests?.length ?? 0}</strong></div>
         <div><span>Smoke</span><strong>{testMetadata.smoke_tests ?? 0}</strong></div>
         <div><span>Needs design</span><strong>{needsDesign}</strong></div>
+        <div><span>Executed</span><strong>{testMetadata.executed_tests ?? 0}</strong></div>
         <div className="wide"><span>Categories</span><strong>{Object.entries(categories).map(([k, v]) => `${k}: ${v}`).join(" | ") || "None"}</strong></div>
       </div>
     );
   }
 
-  if (active === "Quality Metrics") {
+  if (active === "quality") {
     const issueCount = quality.reduce((sum, item) => sum + ((item.quality_issues || item.issues || []).length), 0);
     const contextRank = (context) => ({
       production: 0,
@@ -66,11 +78,13 @@ function SummaryCards({ active, report, testMetadata }) {
     );
   }
 
-  if (active === "Recommendations") {
+  if (active === "recommendations") {
+    const high = recommendations.filter((item) => String(item.priority || "").toLowerCase() === "high").length;
     return (
       <div className="tab-summary-grid">
         <div><span>Actions</span><strong>{recommendations.length}</strong></div>
-        <div className="wide"><span>Top priority</span><strong>{recommendations[0]?.priority || recommendations[0]?.title || "None"}</strong></div>
+        <div><span>High priority</span><strong>{high}</strong></div>
+        <div className="wide"><span>Top action</span><strong>{recommendations[0]?.title || "None"}</strong></div>
       </div>
     );
   }
@@ -85,52 +99,76 @@ function SummaryCards({ active, report, testMetadata }) {
 }
 
 export default function AnalysisTabs({ report }) {
-  const [active, setActive] = useState("Security");
-  const testMetadata = {
+  const [active, setActive] = useState("security");
+  const testMetadata = useMemo(() => ({
     ...(report.metadata?.generated_tests_summary || {}),
     ...(report.metadata?.test_generation_metadata || {}),
-  };
+  }), [report.metadata?.generated_tests_summary, report.metadata?.test_generation_metadata]);
+
+  const nav = useMemo(() => {
+    const testsNeedsDesign = Array.isArray(testMetadata.needs_human_test_design)
+      ? testMetadata.needs_human_test_design.length
+      : Number(testMetadata.needs_human_test_design || 0);
+    const generated = testMetadata.executable_tests ?? report.generated_tests?.length ?? 0;
+    const qualityIssues = (report.quality_metrics || []).reduce(
+      (sum, metric) => sum + ((metric.quality_issues || metric.issues || []).length),
+      0,
+    );
+    const completedAgents = (report.agent_logs || []).filter((log) => log.status === "completed").length;
+    return {
+      security: `${report.security_findings?.length || 0} findings`,
+      tests: `${generated} candidates, ${testsNeedsDesign} need design`,
+      quality: `${qualityIssues} issues`,
+      recommendations: `${report.recommendations?.length || 0} actions`,
+      agents: `${completedAgents}/${report.agent_logs?.length || 0} completed`,
+    };
+  }, [report, testMetadata]);
 
   return (
     <div className="analysis-tabs">
       <div className="tab-buttons">
-        {tabs.map((tab) => (
-          <button
-            key={tab}
-            className={active === tab ? "tab-btn active" : "tab-btn"}
-            onClick={() => setActive(tab)}
-          >
-            {tab}
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              className={active === tab.id ? "analysis-nav-card active" : "analysis-nav-card"}
+              onClick={() => setActive(tab.id)}
+            >
+              <Icon size={18} />
+              <strong>{tab.label}</strong>
+              <span>{nav[tab.id]}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="tab-panel">
         <SummaryCards active={active} report={report} testMetadata={testMetadata} />
 
-        {active === "Security" && (
+        {active === "security" && (
           <SecurityFindingsList findings={report.security_findings} />
         )}
 
-        {active === "Generated Tests" && (
+        {active === "tests" && (
           <GeneratedTestsList
             tests={report.generated_tests}
             metadata={testMetadata}
           />
         )}
 
-        {active === "Quality Metrics" && (
+        {active === "quality" && (
           <QualityMetricsList
             metrics={report.quality_metrics}
             metadata={report.metadata?.quality_analysis_metadata || {}}
           />
         )}
 
-        {active === "Recommendations" && (
+        {active === "recommendations" && (
           <RecommendationList recommendations={report.recommendations} />
         )}
 
-        {active === "Agent Log" && (
+        {active === "agents" && (
           <AgentLogList logs={report.agent_logs} />
         )}
       </div>

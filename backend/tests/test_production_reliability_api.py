@@ -1,0 +1,371 @@
+import io
+import json
+import os
+import sys
+import zipfile
+from datetime import timedelta
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["JWT_SECRET"] = "test-secret"
+os.environ["AUTH_DEBUG_TOKENS"] = "true"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from main import app, mark_stale_analysis_jobs  # noqa: E402
+from models.database import MagicLinkToken, PasswordResetToken, Project, Report, utc_now  # noqa: E402
+from services.database import SessionLocal, init_db  # noqa: E402
+
+client = TestClient(app)
+
+
+def _email(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex[:8]}@example.com"
+
+
+def _register(prefix: str = "user") -> dict:
+    init_db()
+    response = client.post(
+        "/auth/register",
+        json={
+            "full_name": f"{prefix.title()} User",
+            "email": _email(prefix),
+            "password": "strong-password",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _auth_headers(session: dict) -> dict:
+    return {"Authorization": f"Bearer {session['access_token']}"}
+
+
+def _zip_bytes(entries: dict[str, str]) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    payload.seek(0)
+    return payload.getvalue()
+
+
+def _report_payload(project_id: str, project_name: str, score: int = 90) -> dict:
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "status": "completed",
+        "overall_score": score,
+        "quality_score": score,
+        "security_score": score,
+        "test_score": score,
+        "code_analysis": {},
+        "security_findings": [],
+        "quality_metrics": [],
+        "generated_tests": [],
+        "coverage": {"coverage_percent": 0, "estimated": True},
+        "recommendations": [],
+        "metadata": {"project_intelligence": {"frameworks": ["FastAPI"]}},
+    }
+
+
+def _insert_report(user_id: str, project_id: str, project_name: str, score: int = 90) -> None:
+    db = SessionLocal()
+    try:
+        db.add(Project(id=project_id, user_id=user_id, name=project_name, source_type="upload", status="completed"))
+        db.add(
+            Report(
+                project_id=project_id,
+                user_id=user_id,
+                project_name=project_name,
+                status="completed",
+                language="Python",
+                overall_score=score,
+                quality_score=score,
+                security_score=score,
+                test_score=score,
+                report_json=json.dumps(_report_payload(project_id, project_name, score)),
+                pdf_blob=b"%PDF-1.4\n%test\n",
+                markdown_text="# Test",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_register_rejects_invalid_and_duplicate_email():
+    init_db()
+    invalid = client.post(
+        "/auth/register",
+        json={"full_name": "Bad Email", "email": "not-an-email", "password": "strong-password"},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    email = _email("duplicate")
+    first = client.post(
+        "/auth/register",
+        json={"full_name": "Duplicate User", "email": email, "password": "strong-password"},
+    )
+    assert first.status_code == 200
+
+    duplicate = client.post(
+        "/auth/register",
+        json={"full_name": "Duplicate User", "email": email, "password": "strong-password"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "DUPLICATE_EMAIL"
+
+
+def test_login_refresh_current_user_and_change_password_flow():
+    session = _register("auth")
+    email = session["user"]["email"]
+
+    wrong = client.post("/auth/login", json={"email": email, "password": "wrong-password"})
+    assert wrong.status_code == 401
+    assert wrong.json()["error"]["code"] == "INVALID_CREDENTIALS"
+
+    refresh = client.post("/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert refresh.status_code == 200
+
+    bad_refresh = client.post("/auth/refresh", json={"refresh_token": "not-a-token"})
+    assert bad_refresh.status_code == 401
+    assert bad_refresh.json()["error"]["code"] == "SESSION_EXPIRED"
+
+    profile = client.get("/users/me", headers=_auth_headers(session))
+    assert profile.status_code == 200
+    assert profile.json()["user"]["email"] == email
+
+    change = client.post(
+        "/users/me/change-password",
+        headers=_auth_headers(session),
+        json={"current_password": "strong-password", "new_password": "new-strong-password"},
+    )
+    assert change.status_code == 200
+
+    old_login = client.post("/auth/login", json={"email": email, "password": "strong-password"})
+    assert old_login.status_code == 401
+
+    new_login = client.post("/auth/login", json={"email": email, "password": "new-strong-password"})
+    assert new_login.status_code == 200
+
+
+def test_password_reset_token_is_one_time_and_expires():
+    session = _register("reset")
+    email = session["user"]["email"]
+
+    forgot = client.post("/auth/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    token = forgot.json().get("debug_reset_token")
+    assert token
+
+    reset = client.post("/auth/reset-password", json={"token": token, "new_password": "changed-password"})
+    assert reset.status_code == 200
+
+    reuse = client.post("/auth/reset-password", json={"token": token, "new_password": "changed-again"})
+    assert reuse.status_code == 400
+    assert reuse.json()["error"]["code"] == "SESSION_EXPIRED"
+
+    forgot_again = client.post("/auth/forgot-password", json={"email": email})
+    expired_token = forgot_again.json()["debug_reset_token"]
+    db = SessionLocal()
+    try:
+        row = db.query(PasswordResetToken).filter(PasswordResetToken.used_at.is_(None)).order_by(PasswordResetToken.created_at.desc()).first()
+        row.expires_at = utc_now() - timedelta(minutes=1)
+        db.commit()
+    finally:
+        db.close()
+
+    expired = client.post("/auth/reset-password", json={"token": expired_token, "new_password": "valid-password"})
+    assert expired.status_code == 400
+
+
+def test_magic_link_token_is_one_time_and_expires():
+    session = _register("magic")
+    email = session["user"]["email"]
+
+    request = client.post("/auth/magic-link/request", json={"email": email})
+    assert request.status_code == 200
+    token = request.json().get("debug_magic_link_token")
+    assert token
+
+    verify = client.post("/auth/magic-link/verify", json={"token": token})
+    assert verify.status_code == 200
+    assert verify.json()["access_token"]
+
+    reuse = client.post("/auth/magic-link/verify", json={"token": token})
+    assert reuse.status_code == 400
+
+    request_again = client.post("/auth/magic-link/request", json={"email": email})
+    expired_token = request_again.json()["debug_magic_link_token"]
+    db = SessionLocal()
+    try:
+        row = db.query(MagicLinkToken).filter(MagicLinkToken.used_at.is_(None)).order_by(MagicLinkToken.created_at.desc()).first()
+        row.expires_at = utc_now() - timedelta(minutes=1)
+        db.commit()
+    finally:
+        db.close()
+
+    expired = client.post("/auth/magic-link/verify", json={"token": expired_token})
+    assert expired.status_code == 400
+
+
+def test_report_download_delete_and_compare_are_user_scoped():
+    user_a = _register("owner")
+    user_b = _register("intruder")
+    project_a = f"project-{uuid4().hex[:8]}"
+    project_b = f"project-{uuid4().hex[:8]}"
+    _insert_report(user_a["user"]["id"], project_a, "Private Project", 88)
+    _insert_report(user_b["user"]["id"], project_b, "Other Project", 70)
+
+    forbidden_get = client.get(f"/reports/{project_a}", headers=_auth_headers(user_b))
+    assert forbidden_get.status_code == 404
+
+    forbidden_json = client.get(f"/reports/{project_a}/json", headers=_auth_headers(user_b))
+    assert forbidden_json.status_code == 404
+
+    forbidden_pdf = client.get(f"/reports/{project_a}/pdf", headers=_auth_headers(user_b))
+    assert forbidden_pdf.status_code == 404
+
+    forbidden_delete = client.delete(f"/reports/{project_a}", headers=_auth_headers(user_b))
+    assert forbidden_delete.status_code == 404
+
+    compare_cross_user = client.get(f"/reports/compare/{project_a}/{project_b}", headers=_auth_headers(user_a))
+    assert compare_cross_user.status_code == 404
+
+    owner_report = client.get(f"/reports/{project_a}", headers=_auth_headers(user_a))
+    assert owner_report.status_code == 200
+
+
+def test_zip_upload_rejects_malformed_traversal_and_too_many_files():
+    session = _register("zip")
+
+    malformed = client.post(
+        "/projects/upload",
+        headers=_auth_headers(session),
+        files={"file": ("broken.zip", b"not a real zip", "application/zip")},
+    )
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["code"] == "INVALID_ARCHIVE"
+
+    traversal = client.post(
+        "/projects/upload",
+        headers=_auth_headers(session),
+        files={"file": ("traversal.zip", _zip_bytes({"../evil.py": "print('bad')"}), "application/zip")},
+    )
+    assert traversal.status_code == 422
+    assert traversal.json()["error"]["code"] == "INVALID_ARCHIVE"
+
+    previous_limit = os.environ.get("MAX_ARCHIVE_FILES")
+    os.environ["MAX_ARCHIVE_FILES"] = "1"
+    try:
+        too_many = client.post(
+            "/projects/upload",
+            headers=_auth_headers(session),
+            files={"file": ("many.zip", _zip_bytes({"a.py": "print(1)", "b.py": "print(2)"}), "application/zip")},
+        )
+        assert too_many.status_code == 413
+        assert too_many.json()["error"]["code"] == "UPLOAD_TOO_LARGE"
+    finally:
+        if previous_limit is None:
+            os.environ.pop("MAX_ARCHIVE_FILES", None)
+        else:
+            os.environ["MAX_ARCHIVE_FILES"] = previous_limit
+
+
+def test_valid_zip_upload_persists_project_for_owner_only():
+    owner = _register("zip-owner")
+    other = _register("zip-other")
+
+    upload = client.post(
+        "/projects/upload",
+        headers=_auth_headers(owner),
+        files={"file": ("valid.zip", _zip_bytes({"app.py": "def add(a, b):\n    return a + b\n"}), "application/zip")},
+    )
+    assert upload.status_code == 200
+    project_id = upload.json()["project_id"]
+
+    owner_projects = client.get("/projects", headers=_auth_headers(owner))
+    assert project_id in [project["project_id"] for project in owner_projects.json()["projects"]]
+
+    other_progress = client.get(f"/analysis/{project_id}/progress", headers=_auth_headers(other))
+    assert other_progress.status_code == 404
+
+
+def test_github_invalid_url_and_clone_failure_set_persistent_failed_state(monkeypatch):
+    session = _register("github")
+
+    invalid = client.post("/projects/github", headers=_auth_headers(session), json={"url": "https://example.com/repo"})
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "INVALID_GITHUB_URL"
+
+    def fail_clone(*_, **__):
+        raise RuntimeError("clone denied")
+
+    monkeypatch.setattr("main.Repo.clone_from", fail_clone)
+    response = client.post(
+        "/projects/github",
+        headers=_auth_headers(session),
+        json={"url": "https://github.com/example/repo"},
+    )
+    assert response.status_code == 200
+    project_id = response.json()["project_id"]
+
+    progress = client.get(f"/analysis/{project_id}/progress", headers=_auth_headers(session))
+    assert progress.status_code == 200
+    assert progress.json()["status"] == "failed"
+    assert "could not be cloned" in progress.json()["error"].lower()
+
+
+def test_stale_running_jobs_are_marked_failed_on_recovery():
+    session = _register("stale")
+    project_id = f"project-{uuid4().hex[:8]}"
+    db = SessionLocal()
+    try:
+        db.add(
+            Project(
+                id=project_id,
+                user_id=session["user"]["id"],
+                name="Interrupted",
+                source_type="github",
+                source_url="https://github.com/example/repo",
+                status="running",
+                progress=42,
+                current_stage="Security Agent",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    mark_stale_analysis_jobs()
+
+    progress = client.get(f"/analysis/{project_id}/progress", headers=_auth_headers(session))
+    assert progress.status_code == 200
+    assert progress.json()["status"] == "failed"
+    assert progress.json()["current_agent"] == "Interrupted"
+
+
+def test_account_deletion_cascades_owned_projects_reports_and_tokens():
+    session = _register("delete")
+    project_id = f"project-{uuid4().hex[:8]}"
+    _insert_report(session["user"]["id"], project_id, "Delete Me", 75)
+    forgot = client.post("/auth/forgot-password", json={"email": session["user"]["email"]})
+    magic = client.post("/auth/magic-link/request", json={"email": session["user"]["email"]})
+    assert forgot.status_code == 200
+    assert magic.status_code == 200
+
+    delete = client.delete("/users/me", headers=_auth_headers(session))
+    assert delete.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(Project, project_id) is None
+        assert db.query(Report).filter(Report.project_id == project_id).first() is None
+        assert db.query(PasswordResetToken).filter(PasswordResetToken.user_id == session["user"]["id"]).first() is None
+        assert db.query(MagicLinkToken).filter(MagicLinkToken.user_id == session["user"]["id"]).first() is None
+    finally:
+        db.close()

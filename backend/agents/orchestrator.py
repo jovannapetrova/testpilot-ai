@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from services.analysis_progress import (
     fail_analysis,
 )
 
+logger = logging.getLogger("testpilot.agents")
+
 
 class AgentOrchestrator:
     def __init__(self):
@@ -36,13 +39,15 @@ class AgentOrchestrator:
         self.recommendation_agent = RecommendationAgent()
         self.report_agent = ReportAgent()
 
-    def analyze(self, project_dir: Path, project_id: str, project_name: str) -> AnalysisReport:
+    def analyze(self, project_dir: Path, project_id: str, project_name: str, on_progress=None) -> AnalysisReport:
         logs: list[AgentLog] = []
         start_analysis(project_id, project_name)
 
         def run_agent(agent_name, fn):
-            print(f"[AGENT START] {agent_name}", flush=True)
+            logger.info("Agent started: %s for project %s", agent_name, project_id)
             update_agent(project_id, agent_name, "running", "Running")
+            if on_progress:
+                on_progress(agent_name, "running", "Running")
 
             log = AgentLog(
                 name=agent_name,
@@ -54,16 +59,20 @@ class AgentOrchestrator:
 
             try:
                 data = fn()
-                print(f"[AGENT DONE] {agent_name}", flush=True)
+                logger.info("Agent completed: %s for project %s", agent_name, project_id)
                 log.status = AgentStatus.completed
                 log.message = "Completed successfully"
                 update_agent(project_id, agent_name, "completed", "Completed successfully")
+                if on_progress:
+                    on_progress(agent_name, "completed", "Completed successfully")
                 return data
             except Exception as exc:
-                print(f"[AGENT FAILED] {agent_name}: {exc}", flush=True)
+                logger.exception("Agent failed: %s for project %s", agent_name, project_id)
                 log.status = AgentStatus.failed
                 log.message = str(exc)
                 update_agent(project_id, agent_name, "failed", str(exc))
+                if on_progress:
+                    on_progress(agent_name, "failed", str(exc))
                 fail_analysis(project_id, str(exc))
                 raise
             finally:
@@ -217,6 +226,8 @@ class AgentOrchestrator:
             )
             logs.append(report_log)
             update_agent(project_id, self.report_agent.name, "running", "Running")
+            if on_progress:
+                on_progress(self.report_agent.name, "running", "Running")
 
             try:
                 report_log.status = AgentStatus.completed
@@ -229,6 +240,8 @@ class AgentOrchestrator:
                     "completed",
                     "Completed successfully",
                 )
+                if on_progress:
+                    on_progress(self.report_agent.name, "completed", "Completed successfully")
 
                 report.agent_logs = logs
                 final_report = self.report_agent.run(report)
@@ -241,6 +254,8 @@ class AgentOrchestrator:
                 report_log.message = str(exc)
                 report_log.finished_at = self._now()
                 update_agent(project_id, self.report_agent.name, "failed", str(exc))
+                if on_progress:
+                    on_progress(self.report_agent.name, "failed", str(exc))
                 fail_analysis(project_id, str(exc))
                 raise
 
@@ -487,6 +502,10 @@ class AgentOrchestrator:
             "by_execution_safety": by_execution_safety,
             "executable_tests": metadata.get("executable_tests", len(tests)),
             "smoke_tests": metadata.get("smoke_tests", 0),
+            "executed_tests": 0,
+            "passed": 0,
+            "failed": 0,
+            "execution_status": "not_executed",
             "needs_review_tests": metadata.get("needs_review_tests", 0),
             "needs_human_test_design": len(metadata.get("needs_human_test_design", [])),
             "skipped_generation_reasons": metadata.get("skipped_generation_reasons", {}),

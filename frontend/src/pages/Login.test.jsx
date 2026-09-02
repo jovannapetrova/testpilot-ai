@@ -1,0 +1,68 @@
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import Login from "./Login";
+import { renderWithRouter } from "../test/test-utils";
+import { requestMagicLink } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+
+vi.mock("../api/client", () => ({
+  requestMagicLink: vi.fn(),
+}));
+
+vi.mock("../context/AuthContext", () => ({
+  useAuth: vi.fn(),
+}));
+
+const login = vi.fn();
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useAuth.mockReturnValue({
+    login,
+    authNotice: "",
+    clearAuthNotice: vi.fn(),
+  });
+});
+
+describe("Login", () => {
+  it("submits credentials with remember-me enabled by default", async () => {
+    login.mockResolvedValueOnce({ access_token: "token" });
+    renderWithRouter(<Login />);
+
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "person@example.com" } });
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "strong-password" } });
+    fireEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledWith({
+        email: "person@example.com",
+        password: "strong-password",
+        remember_me: true,
+      });
+    });
+  });
+
+  it("shows a friendly wrong-password message", async () => {
+    login.mockRejectedValueOnce({ userMessage: "Incorrect email or password." });
+    renderWithRouter(<Login />);
+
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "person@example.com" } });
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "bad-password" } });
+    fireEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    expect(await screen.findByText("Incorrect email or password.")).toBeInTheDocument();
+  });
+
+  it("requests a backend-backed magic link for the entered email", async () => {
+    requestMagicLink.mockResolvedValueOnce({ message: "If this account exists, a sign-in link will be sent." });
+    renderWithRouter(<Login />);
+
+    fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "person@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /email me a sign-in link/i }));
+
+    await waitFor(() => {
+      expect(requestMagicLink).toHaveBeenCalledWith({ email: "person@example.com" });
+    });
+    expect(await screen.findByText("If this account exists, a sign-in link will be sent.")).toBeInTheDocument();
+  });
+});

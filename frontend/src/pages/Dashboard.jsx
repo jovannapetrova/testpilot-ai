@@ -11,6 +11,8 @@ import {
 import MetricCard from "../components/ui/MetricCard";
 import AgentTimeline from "../components/ui/AgentTimeline";
 import StatusBadge from "../components/ui/StatusBadge";
+import ErrorState from "../components/ui/ErrorState";
+import Skeleton from "../components/ui/Skeleton";
 import { getDashboardSummary, getReport } from "../api/client";
 
 function average(items, key) {
@@ -24,7 +26,7 @@ function average(items, key) {
 }
 
 function trendDirection(items, key) {
-  if (items.length < 2) return "Stable";
+  if (items.length < 2) return "More history needed";
 
   const newest = Number(items[0]?.[key] || 0);
   const oldest = Number(items[items.length - 1]?.[key] || 0);
@@ -39,12 +41,14 @@ export default function Dashboard() {
   const [summary, setSummary] = useState(null);
   const [latestLogs, setLatestLogs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
 
   const loadDashboard = async () => {
     setLoading(true);
 
     try {
+      setError("");
       const response = await getDashboardSummary();
       const nextSummary = response.summary || {};
       const latestReports = nextSummary.latest_reports || [];
@@ -60,6 +64,8 @@ export default function Dashboard() {
       } else {
         setLatestLogs([]);
       }
+    } catch (err) {
+      setError(err.userMessage || "Dashboard data could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -75,7 +81,7 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const latest = summary?.latest_reports || [];
+  const latest = useMemo(() => summary?.latest_reports || [], [summary]);
 
   const topRisk = useMemo(() => {
     return [...latest]
@@ -85,7 +91,7 @@ export default function Dashboard() {
 
   const metrics = [
     {
-      title: "Generated Reports",
+      title: "Completed Analyses",
       value: summary?.total_reports ?? 0,
       subtitle: "Audit-ready outputs",
       icon: FileText,
@@ -97,15 +103,15 @@ export default function Dashboard() {
       icon: Activity,
     },
     {
-      title: "Security Score",
-      value: summary?.avg_security ?? average(latest, "security_score"),
-      subtitle: "Average security score",
+      title: "Security Findings",
+      value: summary?.security_findings ?? 0,
+      subtitle: "Across stored reports",
       icon: ShieldCheck,
     },
     {
-      title: "Testing Score",
-      value: summary?.avg_testing ?? average(latest, "test_score"),
-      subtitle: "Average testing score",
+      title: "Generated Test Candidates",
+      value: summary?.generated_tests ?? 0,
+      subtitle: "Generated, not assumed executed",
       icon: TestTube2,
     },
     {
@@ -150,12 +156,16 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="score-orb">
+        <div className="score-panel">
           <span>Average</span>
           <strong>{summary?.avg_overall ?? 0}</strong>
           <small>/100</small>
         </div>
       </div>
+
+      {error ? <ErrorState title="Dashboard unavailable" message={error} onRetry={loadDashboard} /> : null}
+
+      {loading && !summary ? <Skeleton rows={3} className="dashboard-skeleton" /> : null}
 
       <section className="grid-4 metrics-section">
         {metrics.map((metric) => (
@@ -194,7 +204,11 @@ export default function Dashboard() {
                 </div>
               ))
             ) : (
-              <p className="muted-text">No reports generated yet.</p>
+              <div className="empty-inline">
+                <FileText size={28} />
+                <strong>No completed analyses yet</strong>
+                <p>Run a ZIP or GitHub analysis from Projects to create your first persisted report.</p>
+              </div>
             )}
           </div>
         </div>
@@ -229,7 +243,7 @@ export default function Dashboard() {
                 </div>
               ))
             ) : (
-              <p className="muted-text">Risk data will appear after reports.</p>
+              <p className="muted-text">Risk data will appear after reports are generated.</p>
             )}
           </div>
         </div>

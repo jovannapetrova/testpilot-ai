@@ -30,6 +30,7 @@ class PythonFunctionInfo:
     class_can_instantiate: bool = False
     class_init_args: list[dict[str, Any]] = field(default_factory=list)
     is_property: bool = False
+    env_keys: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -162,6 +163,7 @@ class TestGeneratorAgent:
                     continue
                 lines.extend(test_lines)
                 reasons.append(fn_reason)
+                needs_review = needs_review or fn_needs_review
 
             if len(lines) <= 16:
                 continue
@@ -196,6 +198,7 @@ class TestGeneratorAgent:
 
     def _python_header(self, source_file: str, module_name: str, strategy_name: str) -> list[str]:
         return [
+            "import builtins",
             "import inspect",
             "from unittest.mock import MagicMock, patch",
             "import pytest",
@@ -226,7 +229,7 @@ class TestGeneratorAgent:
             self._record_human_test_design(fn, "Property access may execute project-specific logic and needs an object fixture.")
             return (
                 [],
-                f"{self._python_display_name(fn)} is a property; generated one review TODO instead of treating it as a normal function.",
+                f"{self._python_display_name(fn)} is a property; recorded a human-design target instead of treating it as a normal function.",
                 True,
             )
 
@@ -234,7 +237,15 @@ class TestGeneratorAgent:
             self._record_human_test_design(fn, "Async function needs event-loop and async fixture design.")
             return (
                 [],
-                f"{self._python_display_name(fn)} is async; generated a reviewable contract because project async test setup is unknown.",
+                f"{self._python_display_name(fn)} is async; recorded a human-design target because project async test setup is unknown.",
+                True,
+            )
+
+        if fn.is_method and not fn.class_can_instantiate:
+            self._record_human_test_design(fn, "Class method requires a safe object fixture or constructor arguments.")
+            return (
+                lines,
+                f"{self._python_display_name(fn)} is a class method; recorded one class-qualified human-design target instead of fabricating an instance.",
                 True,
             )
 
@@ -244,38 +255,30 @@ class TestGeneratorAgent:
                 return (
                     lines,
                     f"{self._python_display_name(fn)} looks like network/client API code; generated mock-based coverage and avoided real runtime calls.",
-                    True,
+                    False,
                 )
 
             self._record_human_test_design(fn, "Likely network/API method; valid transport/client fixtures are required.")
             return (
                 [],
-                f"{self._python_display_name(fn)} looks like network/client API code; generated review TODO instead of calling it directly.",
+                f"{self._python_display_name(fn)} looks like network/client API code; recorded a human-design target instead of calling it directly.",
                 True,
             )
 
         if fn.is_method:
-            if fn.class_can_instantiate:
-                method_lines = self._python_class_method_tests(fn, used_test_names)
-                if not method_lines:
-                    self._record_human_test_design(fn, "Class method requires domain fixtures for meaningful assertions.")
-                    return (
-                        [],
-                        f"{self._python_display_name(fn)} needs domain-specific assertions and was not emitted as a placeholder.",
-                        True,
-                    )
-                lines.extend(method_lines)
+            method_lines = self._python_class_method_tests(fn, used_test_names)
+            if not method_lines:
+                self._record_human_test_design(fn, "Class method requires domain fixtures for meaningful assertions.")
                 return (
-                    lines,
-                    f"{self._python_display_name(fn)} belongs to a safely instantiable class; generated class-qualified method checks.",
-                    self._python_method_needs_review(fn),
+                    [],
+                    f"{self._python_display_name(fn)} needs domain-specific assertions and was recorded for human test design.",
+                    True,
                 )
-
-            self._record_human_test_design(fn, "Class method requires a safe object fixture or constructor arguments.")
+            lines.extend(method_lines)
             return (
                 lines,
-                f"{self._python_display_name(fn)} is a class method; generated one class-qualified review TODO instead of fabricating an instance.",
-                True,
+                f"{self._python_display_name(fn)} belongs to a safely instantiable class; generated class-qualified method checks.",
+                False,
             )
 
         if self._python_needs_mocks(fn):
@@ -290,7 +293,7 @@ class TestGeneratorAgent:
             return (
                 lines,
                 f"{self._python_display_name(fn)} calls external resources; generated mock-based pytest coverage for requests/files/env/database-style calls.",
-                True,
+                False,
             )
 
         if self._python_is_simple_pure_function(fn):
@@ -329,13 +332,13 @@ class TestGeneratorAgent:
             return (
                 lines,
                 f"{self._python_display_name(fn)} raises explicit exceptions; generated pytest.raises-style boundary coverage while avoiding unsafe runtime assumptions.",
-                True,
+                False,
             )
 
         self._record_human_test_design(fn, "Function depends on domain-specific inputs or runtime state that cannot be inferred safely.")
         return (
             [],
-            f"{self._python_display_name(fn)} could not be executed safely from static analysis; generated a reviewable test with clear reason.",
+            f"{self._python_display_name(fn)} could not be executed safely from static analysis; recorded a human-design target with a clear reason.",
             True,
         )
 
@@ -401,8 +404,6 @@ class TestGeneratorAgent:
 
     def _python_raises_tests(self, fn: PythonFunctionInfo, used_test_names: set[str]) -> list[str]:
         exception = fn.raises[0] if fn.raises else "Exception"
-        if exception in {"Exception", "BaseException"}:
-            exception = "Exception"
         test_name = self._unique_test_name(
             f"test_{self._python_safe_test_subject(fn)}_raises_for_invalid_boundary_input",
             used_test_names,
@@ -415,7 +416,8 @@ class TestGeneratorAgent:
             "    module = _target_module()",
             f"    fn = {target_expr}",
             "    assert callable(fn)",
-            f"    with pytest.raises(({exception}, TypeError, ValueError, AssertionError)):",
+            f"    expected_exception = getattr(builtins, '{exception}', None) or getattr(module, '{exception}', Exception)",
+            "    with pytest.raises((expected_exception, TypeError, ValueError, AssertionError)):",
             f"        fn({args})",
             "",
         ]
@@ -469,18 +471,13 @@ class TestGeneratorAgent:
 
         lines = [
             "",
-            f"def {self._unique_test_name('test_web_application_object_is_exposed', used_test_names)}():",
-            "    module = _target_module()",
-            f"    app = getattr(target_module, '{app_name}', None)",
-            "    assert app is not None",
-            "",
         ]
 
         if framework == "fastapi":
             lines.extend([
                 "def _generated_fastapi_client():",
                 "    module = _target_module()",
-                "    TestClient = pytest.importorskip('fastapi.testclient').TestClient",
+                "    from fastapi.testclient import TestClient",
                 f"    app = getattr(target_module, '{app_name}', None)",
                 "    if app is None:",
                 "        raise AssertionError('FastAPI app object was not exported')",
@@ -586,6 +583,7 @@ class TestGeneratorAgent:
                             or decorator.endswith(".deleter")
                             for decorator in decorators
                         ),
+                        env_keys=self._python_env_keys(node),
                     )
                 )
 
@@ -709,18 +707,32 @@ class TestGeneratorAgent:
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
                 calls.add(self._ast_name(child.func))
+            elif isinstance(child, ast.Attribute):
+                name = self._ast_name(child)
+                if name.startswith(("os.environ", "os.getenv", "requests.", "httpx.", "urllib.", "socket.")):
+                    calls.add(name)
         return calls
 
+    def _python_env_keys(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+        keys: set[str] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Subscript) and self._ast_name(child.value) == "os.environ":
+                value = child.slice
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    keys.add(value.value)
+            elif isinstance(child, ast.Call) and self._ast_name(child.func) == "os.getenv":
+                if child.args and isinstance(child.args[0], ast.Constant) and isinstance(child.args[0].value, str):
+                    keys.add(child.args[0].value)
+        return keys
+
     def _python_is_simple_pure_function(self, fn: PythonFunctionInfo) -> bool:
-        if not fn.args:
-            return True
         unsafe_tokens = {
-            "requests", "httpx", "open", "os.system", "subprocess", "socket",
-            "connect", "execute", "commit", "cursor", "session", "query",
+            "requests.", "httpx.", "open", "os.environ", "os.system", "subprocess.",
+            "socket.", "connect", "execute", "commit", "cursor", "session", "query",
             "save", "delete", "write", "remove", "unlink", "request", "stream",
             "send", "client", "transport",
         }
-        joined = " ".join(sorted(fn.calls | fn.imports)).lower()
+        joined = " ".join(sorted(fn.calls)).lower()
         return not any(token in joined for token in unsafe_tokens)
 
     def _python_needs_mocks(self, fn: PythonFunctionInfo) -> bool:
@@ -729,7 +741,7 @@ class TestGeneratorAgent:
             token in tokens
             for token in [
                 "requests", "httpx", "open", "os.environ", "subprocess",
-                "connect", "cursor", "execute", "session", "repository", "client",
+                "os.getenv", "connect", "cursor", "execute", "session", "repository", "client",
                 "request", "stream", "send", "transport",
             ]
         )
@@ -747,7 +759,7 @@ class TestGeneratorAgent:
         if lower_name in risky_names and not self._python_body_proves_pure(fn):
             return True
 
-        tokens = " ".join(sorted(fn.calls | fn.imports)).lower()
+        tokens = " ".join(sorted(fn.calls)).lower()
         return any(
             token in tokens
             for token in [
@@ -768,8 +780,11 @@ class TestGeneratorAgent:
         if meaningful_calls and not meaningful_calls.issubset(allowed_calls):
             return False
 
-        network_imports = {"requests", "httpx", "httpcore", "urllib", "socket"}
-        return not bool(fn.imports & network_imports)
+        tokens = " ".join(sorted(fn.calls)).lower()
+        return not any(
+            token in tokens
+            for token in ["requests.", "httpx.", "httpcore.", "urllib.", "socket."]
+        )
 
     def _python_patch_targets(self, fn: PythonFunctionInfo) -> list[dict[str, Any]]:
         patchable = []
@@ -790,9 +805,15 @@ class TestGeneratorAgent:
                 patchable.append({"expr": f"patch.object(target_module.{owner}, '{attr}')", "creates_mock": True})
             elif lower == "open":
                 patchable.append({"expr": "patch('builtins.open')", "creates_mock": True})
-            elif "os.environ" in lower:
-                patchable.append({"expr": "patch.object(target_module.os, 'environ', {})", "creates_mock": False})
+            elif "os.environ" in lower or lower == "os.getenv":
+                env_values = self._python_env_patch_values(fn)
+                patchable.append({"expr": f"patch.dict(target_module.os.environ, {env_values}, clear=False)", "creates_mock": False})
         return patchable[:3]
+
+    def _python_env_patch_values(self, fn: PythonFunctionInfo) -> str:
+        keys = sorted(fn.env_keys) or ["TESTPILOT_GENERATED_ENV"]
+        values = ", ".join(f"{key!r}: 'test-value'" for key in keys[:5])
+        return "{" + values + "}"
 
     def _python_cases_for_function(self, fn: PythonFunctionInfo) -> list[str]:
         if not fn.args:
@@ -804,7 +825,8 @@ class TestGeneratorAgent:
 
         cases = []
         seen = set()
-        for values in [normal, boundary, empty]:
+        candidate_values = [normal] if fn.raises else [normal, boundary, empty]
+        for values in candidate_values:
             rendered = self._python_tuple_literal(values)
             if rendered not in seen:
                 seen.add(rendered)
@@ -1070,7 +1092,7 @@ class TestGeneratorAgent:
         else:
             if not info.exports:
                 return "", "unit", None, "module", "low", False, [
-                    "No explicit exports were found; no placeholder Jest test was generated."
+                    "No explicit exports were found; no Jest test was generated."
                 ]
             lines.extend(self._javascript_module_tests(import_path, info))
             if len(lines) <= 3:
@@ -1622,7 +1644,7 @@ class TestGeneratorAgent:
 
         if not info.is_pojo:
             return "", test_type, framework, target_kind, "low", False, [
-                "Java class requires constructor/dependency fixtures; no placeholder test was generated."
+                "Java class requires constructor/dependency fixtures; no JUnit test was generated."
             ]
 
         pojo_tests = self._java_pojo_tests(info)
@@ -1864,22 +1886,26 @@ class TestGeneratorAgent:
 
     def _priority_score(self, path: str) -> int:
         value = path.replace("\\", "/").lower()
+        segments = [segment for segment in value.split("/") if segment]
+        filename = segments[-1] if segments else value
         score = 100
         production_boosts = [
             "src/", "app/", "lib/", "server/", "api/", "routes/", "controllers/",
             "services/", "models/", "main.", "index.", "application.", "resource/",
         ]
-        low_value = [
-            "tests/", "/tests/", "test/", "/test/", "test_", "docs/", "docs_src/",
-            "examples/", "example/", "tutorial/", ".github/", "scripts/", "demo/",
-            "website/", "site/", "www/",
-        ]
+        low_value_segments = {
+            "tests", "test", "docs", "docs_src", "examples", "tutorial",
+            ".github", "scripts", "website", "site", "www",
+        }
         for token in production_boosts:
             if token in value:
                 score -= 25
-        for token in low_value:
-            if token in value:
-                score += 40
+        if any(segment in low_value_segments for segment in segments):
+            score += 40
+        if segments and segments[0] == "demo":
+            score += 40
+        if filename.startswith("test_") or filename.endswith(("_test.py", ".test.js", ".spec.js", ".test.ts", ".spec.ts")):
+            score += 40
         return score
 
     def _is_test_file(self, path: str) -> bool:
@@ -1891,12 +1917,16 @@ class TestGeneratorAgent:
 
     def _is_ignored_path(self, path: str) -> bool:
         value = path.replace("\\", "/").lower()
-        return any(token in value for token in [
-            "node_modules/", "venv/", ".venv/", "__pycache__/", "dist/",
-            "build/", ".git/", "docs/", "docs_src/", "examples/", "example/",
-            "tutorial/", "website/", "site/", "www/", "sample_projects/", "uploads/", "storage/", "target/",
-            ".mvn/", ".gradle/",
-        ])
+        segments = [segment for segment in value.split("/") if segment]
+        ignored_segments = {
+            "node_modules", "venv", ".venv", "__pycache__", "dist", "build",
+            ".git", "docs", "docs_src", "examples", "tutorial",
+            "website", "site", "www", "sample_projects", "uploads", "storage",
+            "target", ".mvn", ".gradle",
+        }
+        if any(segment in ignored_segments for segment in segments):
+            return True
+        return bool(segments and segments[0] in {"demo", "scripts"})
 
     def _ignore_python_function(self, name: str) -> bool:
         if name in {"__str__", "__repr__", "__eq__"}:

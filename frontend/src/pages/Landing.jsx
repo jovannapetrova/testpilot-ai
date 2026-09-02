@@ -17,8 +17,8 @@ const features = [
   },
   {
     icon: TestTube2,
-    title: "Automated Test Generation",
-    text: "Generate test scenarios, edge cases and structured QA recommendations.",
+    title: "Generated Test Candidates",
+    text: "Create executable candidate tests and separate targets that require human fixture design.",
   },
   {
     icon: ShieldCheck,
@@ -28,7 +28,7 @@ const features = [
   {
     icon: FileText,
     title: "Audit-Ready Reports",
-    text: "Export structured PDF and JSON reports for documentation and presentation.",
+    text: "Export structured PDF, JSON, CSV and Markdown reports for review and presentation.",
   },
 ];
 
@@ -63,8 +63,7 @@ export default function Landing() {
           </div>
 
           <h1>
-            Automate software testing, security analysis and quality evaluation
-            with AI agents.
+            Analyze software projects with specialized AI quality agents.
           </h1>
 
           <p>
@@ -74,39 +73,36 @@ export default function Landing() {
           </p>
 
           <div className="hero-actions">
-            <Link to="/dashboard" className="btn btn-primary">
-              Get Started
+            <Link to="/projects" className="btn btn-primary">
+              Analyze a Project
             </Link>
-            <Link to="/register" className="btn btn-ghost">
-              Create Account
+            <Link to="/docs" className="btn btn-ghost">
+              View Documentation
             </Link>
           </div>
         </div>
 
         <div className="hero-panel">
-          <div className="terminal-card">
-            <div className="terminal-dots">
-              <span />
-              <span />
-              <span />
+          <div className="capability-panel">
+            <div>
+              <ShieldCheck size={20} />
+              <strong>Security Analysis</strong>
+              <span>Severity, confidence, context and remediation.</span>
             </div>
-            <pre>{`> TestPilot Manager Agent started
-> Code Analyzer Agent completed
-> Security Agent completed
-> Test Generator Agent running
-> Quality report ready`}</pre>
-          </div>
-
-          <div className="hero-stats">
             <div>
               <Code2 size={20} />
-              <strong>42</strong>
-              <span>Generated tests</span>
+              <strong>Code Quality</strong>
+              <span>Maintainability, complexity and production hotspots.</span>
+            </div>
+            <div>
+              <TestTube2 size={20} />
+              <strong>Testing Intelligence</strong>
+              <span>Generated candidates, smoke tests and human-design targets.</span>
             </div>
             <div>
               <GitBranch size={20} />
-              <strong>3</strong>
-              <span>Projects analyzed</span>
+              <strong>Repository Analysis</strong>
+              <span>ZIP uploads and public GitHub repositories.</span>
             </div>
           </div>
         </div>

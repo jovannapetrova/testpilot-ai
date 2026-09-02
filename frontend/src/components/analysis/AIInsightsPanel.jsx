@@ -27,8 +27,6 @@ export default function AIInsightsPanel({ insights }) {
 
   return (
     <div className="ai-insights-panel">
-      <h4>AI Executive Insights</h4>
-
       <div className="insight-grid">
         <div>
           <span>Risk Level</span>
@@ -38,6 +36,12 @@ export default function AIInsightsPanel({ insights }) {
           <span>Main Weakness</span>
           <strong>{insights.main_weakness}</strong>
         </div>
+        {insights.primary_strength ? (
+          <div>
+            <span>Primary Strength</span>
+            <strong>{insights.primary_strength}</strong>
+          </div>
+        ) : null}
       </div>
 
       <p>{insights.summary}</p>

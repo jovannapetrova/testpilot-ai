@@ -1,53 +1,73 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import shutil
+import tempfile
 import uuid
-import zipfile
 import csv
 import json
 from io import StringIO
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response
+from fastapi.exceptions import RequestValidationError
 from git import Repo
 from sqlalchemy.orm import Session
 
 from agents.orchestrator import AgentOrchestrator
-from models.database import Project, User, utc_now
+from models.database import MagicLinkToken, PasswordResetToken, Project, User, utc_now
 from models.schemas import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     GitHubAnalyzeRequest,
     LoginRequest,
+    MagicLinkRequest,
+    MagicLinkVerifyRequest,
     RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     UpdateProfileRequest,
 )
-from services.analysis_progress import get_progress, start_analysis, fail_analysis
+from services.analysis_progress import AGENT_ORDER, get_progress, start_analysis, fail_analysis
+from services.api_errors import (
+    http_exception_handler,
+    raise_api_error,
+    validation_exception_handler,
+)
 from services.auth_service import (
     create_access_token,
+    create_one_time_token,
     create_refresh_token,
     decode_token,
     get_current_user,
+    hash_one_time_token,
     hash_password,
     normalize_email,
     public_user,
     verify_password,
 )
 from services.database import SessionLocal, get_db, init_db
+from services.email_service import (
+    debug_tokens_enabled,
+    email_delivery_configured,
+    send_magic_link_email,
+    send_password_reset_email,
+)
 from services.report_storage import (
     REPORTS_DIR,
     build_markdown_report,
     delete_report_record,
+    generate_pdf_report,
     get_report_record,
     save_analysis_report,
     list_reports,
     load_report,
-    get_report_json_path,
-    get_report_pdf_path,
 )
+from utils.file_utils import ArchiveValidationError, archive_limits_from_env, safe_extract_zip
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -68,12 +88,31 @@ CORS_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX") or None
 
-app = FastAPI(title="TestPilot AI API", version="1.0.0")
+OPENAPI_TAGS = [
+    {"name": "Health", "description": "Runtime health and deployment checks."},
+    {"name": "Authentication", "description": "JWT session, password reset and magic-link authentication."},
+    {"name": "Users", "description": "Authenticated user profile and account management."},
+    {"name": "Projects", "description": "ZIP upload, GitHub analysis and project archive operations."},
+    {"name": "Analysis", "description": "Analysis progress and agent execution state."},
+    {"name": "Reports", "description": "Persisted reports, exports, deletion and comparison."},
+    {"name": "Dashboard", "description": "Account-level analytics and report summaries."},
+]
+
+app = FastAPI(
+    title="TestPilot AI API",
+    version="1.0.0",
+    description="Authenticated multi-agent software quality analysis API with user-scoped persistence.",
+    openapi_tags=OPENAPI_TAGS,
+)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials="*" not in CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,6 +125,7 @@ def log_startup():
         if os.getenv("JWT_SECRET", "dev-only-change-me") == "dev-only-change-me":
             raise RuntimeError("JWT_SECRET must be configured in production.")
     init_db()
+    mark_stale_analysis_jobs()
     logger.info("TestPilot AI API starting with CORS origins: %s", CORS_ORIGINS)
 
 
@@ -104,13 +144,35 @@ def detect_language(files):
     return "Unknown"
 
 
+def _now_iso(value) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _seconds_since(value) -> int:
+    if not value:
+        return 0
+    try:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - value).total_seconds()))
+    except Exception:
+        return 0
+
+
 def project_summary(project: Project) -> dict:
     frameworks = []
+    report_scores = {}
     try:
-        latest_report = project.reports[0] if project.reports else None
+        latest_report = max(project.reports, key=lambda item: item.created_at) if project.reports else None
         if latest_report:
             report_data = json.loads(latest_report.report_json)
             frameworks = report_data.get("metadata", {}).get("project_intelligence", {}).get("frameworks", [])
+            report_scores = {
+                "overall_score": latest_report.overall_score,
+                "quality_score": latest_report.quality_score,
+                "security_score": latest_report.security_score,
+                "test_score": latest_report.test_score,
+            }
     except Exception:
         frameworks = []
 
@@ -127,10 +189,13 @@ def project_summary(project: Project) -> dict:
         "total_files": project.total_files,
         "status": project.status,
         "progress": project.progress,
+        "current_stage": project.current_stage,
         "error": project.error,
-        "created_at": project.created_at.isoformat() if project.created_at else None,
-        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
-        "completed_at": project.completed_at.isoformat() if project.completed_at else None,
+        "created_at": _now_iso(project.created_at),
+        "updated_at": _now_iso(project.updated_at),
+        "started_at": _now_iso(project.started_at),
+        "completed_at": _now_iso(project.completed_at),
+        **report_scores,
     }
 
 
@@ -150,6 +215,7 @@ def update_project_status(
     status_value: str,
     progress: int | None = None,
     error: str | None = None,
+    current_stage: str | None = None,
 ) -> None:
     project = db.get(Project, project_id)
     if not project or project.user_id != user_id:
@@ -157,13 +223,148 @@ def update_project_status(
 
     project.status = status_value
     project.updated_at = utc_now()
+    if status_value == "running" and not project.started_at:
+        project.started_at = utc_now()
     if progress is not None:
         project.progress = progress
+    if current_stage is not None:
+        project.current_stage = current_stage
     if error:
         project.error = error
-    if status_value == "completed":
+    if status_value == "running" and error is None:
+        project.error = None
+    if status_value in {"completed", "failed"}:
         project.completed_at = utc_now()
     db.commit()
+
+
+def make_progress_callback(db: Session, project_id: str, user_id: str):
+    total_agents = max(1, len(AGENT_ORDER))
+
+    def callback(agent_name: str, stage_status: str, message: str = "") -> None:
+        if stage_status == "running":
+            completed = max(0, AGENT_ORDER.index(agent_name)) if agent_name in AGENT_ORDER else 0
+            progress = min(95, round((completed / total_agents) * 100))
+            update_project_status(
+                db,
+                project_id,
+                user_id,
+                "running",
+                progress=progress,
+                current_stage=agent_name,
+            )
+        elif stage_status == "completed":
+            completed = (AGENT_ORDER.index(agent_name) + 1) if agent_name in AGENT_ORDER else total_agents
+            progress = min(99, round((completed / total_agents) * 100))
+            update_project_status(
+                db,
+                project_id,
+                user_id,
+                "running",
+                progress=progress,
+                current_stage=agent_name,
+            )
+        elif stage_status == "failed":
+            update_project_status(
+                db,
+                project_id,
+                user_id,
+                "failed",
+                error=message or "Analysis failed.",
+                current_stage=agent_name,
+            )
+
+    return callback
+
+
+def mark_stale_analysis_jobs() -> None:
+    db = SessionLocal()
+    try:
+        stale_jobs = db.query(Project).filter(Project.status == "running").all()
+        for project in stale_jobs:
+            project.status = "failed"
+            project.progress = min(project.progress or 0, 99)
+            project.current_stage = "Interrupted"
+            project.error = "Analysis was interrupted before completion. Please retry the analysis."
+            project.updated_at = utc_now()
+            project.completed_at = utc_now()
+        if stale_jobs:
+            logger.warning("Marked %s stale analysis job(s) as failed during startup.", len(stale_jobs))
+            db.commit()
+    finally:
+        db.close()
+
+
+def owned_report_or_404(project_id: str, user_id: str, db: Session):
+    record = get_report_record(project_id, user_id, db)
+    if not record:
+        raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
+    return record
+
+
+def remove_owned_project_artifacts(project_id: str) -> None:
+    targets = [
+        UPLOAD_DIR / project_id,
+        REPORTS_DIR / project_id,
+        REPORTS_DIR / f"{project_id}_report.json",
+        REPORTS_DIR / f"{project_id}_report.pdf",
+    ]
+    for target in targets:
+        try:
+            resolved = target.resolve()
+            allowed_roots = [UPLOAD_DIR.resolve(), REPORTS_DIR.resolve()]
+            if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+                continue
+            if resolved.is_dir():
+                shutil.rmtree(resolved)
+            elif resolved.exists():
+                resolved.unlink()
+        except Exception:
+            logger.exception("Failed to remove owned artifact for project %s.", project_id)
+
+
+def _token_expired(value) -> bool:
+    if not value:
+        return True
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value < datetime.now(timezone.utc)
+
+
+def _issue_password_reset_token(user: User, db: Session) -> str:
+    now = utc_now()
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now})
+    token = create_one_time_token()
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_one_time_token(token),
+            expires_at=now + timedelta(minutes=int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))),
+        )
+    )
+    db.commit()
+    return token
+
+
+def _issue_magic_link_token(user: User, db: Session) -> str:
+    now = utc_now()
+    db.query(MagicLinkToken).filter(
+        MagicLinkToken.user_id == user.id,
+        MagicLinkToken.used_at.is_(None),
+    ).update({"used_at": now})
+    token = create_one_time_token()
+    db.add(
+        MagicLinkToken(
+            user_id=user.id,
+            token_hash=hash_one_time_token(token),
+            expires_at=now + timedelta(minutes=int(os.getenv("MAGIC_LINK_TOKEN_MINUTES", "15"))),
+        )
+    )
+    db.commit()
+    return token
 
 
 def restore_uploaded_project(project: Project, project_dir: Path, extracted_dir: Path) -> None:
@@ -176,8 +377,7 @@ def restore_uploaded_project(project: Project, project_dir: Path, extracted_dir:
     extracted_dir.mkdir(parents=True, exist_ok=True)
     saved_file = project_dir / project.filename
     saved_file.write_bytes(project.upload_blob)
-    with zipfile.ZipFile(saved_file, "r") as zip_ref:
-        zip_ref.extractall(extracted_dir)
+    safe_extract_zip(saved_file, extracted_dir, archive_limits_from_env())
 
 
 def run_github_analysis_background(project_id: str, url: str, user_id: str):
@@ -187,27 +387,60 @@ def run_github_analysis_background(project_id: str, url: str, user_id: str):
     db = SessionLocal()
 
     try:
-        update_project_status(db, project_id, user_id, "running", 5)
-        Repo.clone_from(url, extracted_dir, depth=1)
+        update_project_status(db, project_id, user_id, "running", 5, current_stage="Cloning repository")
+        try:
+            Repo.clone_from(url, extracted_dir, depth=1)
+        except Exception as exc:
+            logger.warning("GitHub clone failed for project %s: %s", project_id, exc)
+            public_message = "Repository could not be cloned. Confirm that the URL is public and accessible."
+            fail_analysis(project_id, public_message)
+            update_project_status(
+                db,
+                project_id,
+                user_id,
+                "failed",
+                error=public_message,
+                current_stage="Clone failed",
+            )
+            return
+
+        files = [p for p in extracted_dir.rglob("*") if p.is_file()]
+        project = db.get(Project, project_id)
+        if project and project.user_id == user_id:
+            project.language = detect_language(files)
+            project.total_files = len(files)
+            project.updated_at = utc_now()
+            db.commit()
+
+        update_project_status(db, project_id, user_id, "running", 10, current_stage="Repository cloned")
 
         orchestrator = AgentOrchestrator()
         report = orchestrator.analyze(
             project_dir=extracted_dir,
             project_id=project_id,
             project_name=project_name,
+            on_progress=make_progress_callback(db, project_id, user_id),
         )
 
         save_analysis_report(report, user_id=user_id, db=db)
 
     except Exception as exc:
         logger.exception("GitHub analysis failed for project %s", project_id)
-        fail_analysis(project_id, str(exc))
-        update_project_status(db, project_id, user_id, "failed", error=str(exc))
+        public_message = "Analysis failed while processing this repository."
+        fail_analysis(project_id, public_message)
+        update_project_status(
+            db,
+            project_id,
+            user_id,
+            "failed",
+            error=public_message,
+            current_stage="Analysis failed",
+        )
     finally:
         db.close()
 
 
-@app.get("/")
+@app.get("/", tags=["Health"], summary="Backend service root")
 def health_check():
     return {
         "status": "online",
@@ -215,7 +448,7 @@ def health_check():
     }
 
 
-@app.get("/health")
+@app.get("/health", tags=["Health"], summary="Health check")
 def health():
     return {
         "status": "healthy",
@@ -224,12 +457,16 @@ def health():
     }
 
 
-@app.post("/auth/register")
+@app.post("/auth/register", tags=["Authentication"], summary="Register a user account")
 def register(request: RegisterRequest, db: Session = Depends(get_db)):
     email = normalize_email(request.email)
     existing = db.query(User).filter(User.email == email).first()
     if existing:
-        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+        raise_api_error(
+            "DUPLICATE_EMAIL",
+            "An account with this email already exists.",
+            status.HTTP_409_CONFLICT,
+        )
 
     user = User(
         full_name=request.full_name.strip(),
@@ -242,13 +479,17 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
     return create_auth_payload(user)
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", tags=["Authentication"], summary="Create an authenticated JWT session")
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == normalize_email(request.email)).first()
     if not user or not verify_password(request.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise_api_error(
+            "INVALID_CREDENTIALS",
+            "Incorrect email or password.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="This account is disabled.")
+        raise_api_error("FORBIDDEN", "This account is disabled.", status.HTTP_403_FORBIDDEN)
 
     user.last_login_at = utc_now()
     db.commit()
@@ -256,34 +497,143 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     return create_auth_payload(user)
 
 
-@app.post("/auth/refresh")
+@app.post("/auth/refresh", tags=["Authentication"], summary="Refresh a JWT session")
 def refresh_session(request: RefreshRequest, db: Session = Depends(get_db)):
     payload = decode_token(request.refresh_token, "refresh")
     user = db.get(User, payload.get("sub"))
     if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User account is not available.")
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "Your session is invalid or expired. Please sign in again.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
     return create_auth_payload(user)
 
 
-@app.post("/auth/logout")
+@app.post("/auth/logout", tags=["Authentication"], summary="End the current stateless JWT session")
 def logout(_: User = Depends(get_current_user)):
     return {"success": True, "message": "Logged out successfully."}
 
 
-@app.post("/auth/forgot-password")
-def forgot_password(_: dict):
-    return {
+@app.post("/auth/forgot-password", tags=["Authentication"], summary="Request password reset instructions")
+def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == normalize_email(request.email)).first()
+    delivery_ready = email_delivery_configured()
+    debug_token = None
+
+    if user and (delivery_ready or debug_tokens_enabled()):
+        token = _issue_password_reset_token(user, db)
+        if delivery_ready:
+            send_password_reset_email(user.email, token)
+        if debug_tokens_enabled():
+            debug_token = token
+
+    response = {
         "success": True,
-        "message": "If an account exists for that email, password reset instructions will be sent when email delivery is configured.",
+        "delivery_configured": delivery_ready,
+        "message": (
+            "If an account exists for that email, password reset instructions will be sent."
+            if delivery_ready
+            else "Password reset email delivery is not configured for this environment."
+        ),
     }
+    if debug_token:
+        response["debug_reset_token"] = debug_token
+    return response
 
 
-@app.get("/users/me")
+@app.post("/auth/reset-password", tags=["Authentication"], summary="Reset a password with a one-time token")
+def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    token_hash = hash_one_time_token(request.token)
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
+        PasswordResetToken.used_at.is_(None),
+    ).first()
+
+    if not reset_token or _token_expired(reset_token.expires_at):
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "This reset link is invalid or expired. Request a new password reset link.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = db.get(User, reset_token.user_id)
+    if not user or not user.is_active:
+        raise_api_error(
+            "AUTH_REQUIRED",
+            "User account is not available.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    user.password_hash = hash_password(request.new_password)
+    reset_token.used_at = utc_now()
+    db.commit()
+    return {"success": True, "message": "Password reset successfully. You can now sign in."}
+
+
+@app.post("/auth/magic-link/request", tags=["Authentication"], summary="Request a one-time sign-in link")
+def request_magic_link(request: MagicLinkRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == normalize_email(request.email)).first()
+    delivery_ready = email_delivery_configured()
+    debug_token = None
+
+    if user and user.is_active and (delivery_ready or debug_tokens_enabled()):
+        token = _issue_magic_link_token(user, db)
+        if delivery_ready:
+            send_magic_link_email(user.email, token)
+        if debug_tokens_enabled():
+            debug_token = token
+
+    response = {
+        "success": True,
+        "delivery_configured": delivery_ready,
+        "message": (
+            "If an account exists for that email, a sign-in link will be sent."
+            if delivery_ready
+            else "Magic-link email delivery is not configured for this environment."
+        ),
+    }
+    if debug_token:
+        response["debug_magic_link_token"] = debug_token
+    return response
+
+
+@app.post("/auth/magic-link/verify", tags=["Authentication"], summary="Verify a one-time magic sign-in link")
+def verify_magic_link(request: MagicLinkVerifyRequest, db: Session = Depends(get_db)):
+    token_hash = hash_one_time_token(request.token)
+    magic_token = db.query(MagicLinkToken).filter(
+        MagicLinkToken.token_hash == token_hash,
+        MagicLinkToken.used_at.is_(None),
+    ).first()
+
+    if not magic_token or _token_expired(magic_token.expires_at):
+        raise_api_error(
+            "SESSION_EXPIRED",
+            "This sign-in link is invalid or expired. Request a new sign-in link.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = db.get(User, magic_token.user_id)
+    if not user or not user.is_active:
+        raise_api_error(
+            "AUTH_REQUIRED",
+            "User account is not available.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    magic_token.used_at = utc_now()
+    user.last_login_at = utc_now()
+    db.commit()
+    db.refresh(user)
+    return create_auth_payload(user)
+
+
+@app.get("/users/me", tags=["Users"], summary="Get current user profile")
 def me(current_user: User = Depends(get_current_user)):
     return {"success": True, "user": public_user(current_user)}
 
 
-@app.patch("/users/me")
+@app.patch("/users/me", tags=["Users"], summary="Update current user profile")
 def update_profile(
     request: UpdateProfileRequest,
     current_user: User = Depends(get_current_user),
@@ -299,7 +649,7 @@ def update_profile(
     return {"success": True, "user": public_user(user)}
 
 
-@app.post("/users/me/change-password")
+@app.post("/users/me/change-password", tags=["Users"], summary="Change current user password")
 def change_password(
     request: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
@@ -307,64 +657,93 @@ def change_password(
 ):
     user = db.get(User, current_user.id)
     if not verify_password(request.current_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+        raise_api_error(
+            "INVALID_CREDENTIALS",
+            "Current password is incorrect.",
+            status.HTTP_400_BAD_REQUEST,
+        )
     user.password_hash = hash_password(request.new_password)
     db.commit()
     return {"success": True, "message": "Password changed successfully."}
 
 
-@app.delete("/users/me")
+@app.delete("/users/me", tags=["Users"], summary="Delete current user account and owned data")
 def delete_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.get(User, current_user.id)
+    owned_project_ids = [project.id for project in user.projects] if user else []
     db.delete(user)
     db.commit()
+    for project_id in owned_project_ids:
+        remove_owned_project_artifacts(project_id)
     return {"success": True, "message": "Account deleted successfully."}
 
 
-@app.post("/projects/upload")
+@app.post("/projects/upload", tags=["Projects"], summary="Upload and validate a ZIP project")
 async def upload_project(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not file.filename.endswith(".zip"):
-        return {"success": False, "message": "Only ZIP files are supported."}
+    filename = Path(file.filename or "").name
+    if not filename or not filename.lower().endswith(".zip"):
+        raise_api_error(
+            "INVALID_ARCHIVE",
+            "Only ZIP project archives are supported.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
 
     project_id = str(uuid.uuid4())
     project_dir = UPLOAD_DIR / project_id
     extracted_dir = project_dir / "extracted"
+    limits = archive_limits_from_env()
 
     project_dir.mkdir(parents=True, exist_ok=True)
     extracted_dir.mkdir(parents=True, exist_ok=True)
 
-    saved_file = project_dir / file.filename
+    saved_file = project_dir / filename
 
     upload_bytes = await file.read()
+    if len(upload_bytes) > limits.max_upload_bytes:
+        shutil.rmtree(project_dir, ignore_errors=True)
+        raise_api_error(
+            "UPLOAD_TOO_LARGE",
+            "The uploaded archive is larger than the configured upload limit.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
     with saved_file.open("wb") as buffer:
         buffer.write(upload_bytes)
 
     try:
-        with zipfile.ZipFile(saved_file, "r") as zip_ref:
-            zip_ref.extractall(extracted_dir)
-    except zipfile.BadZipFile:
-        return {"success": False, "message": "Invalid ZIP archive."}
+        safe_extract_zip(saved_file, extracted_dir, limits)
+    except ArchiveValidationError as exc:
+        shutil.rmtree(project_dir, ignore_errors=True)
+        raise_api_error(exc.code, exc.message, exc.status_code)
 
     files = [p for p in extracted_dir.rglob("*") if p.is_file()]
+    if not files:
+        shutil.rmtree(project_dir, ignore_errors=True)
+        raise_api_error(
+            "INVALID_ARCHIVE",
+            "The archive does not contain analyzable files.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
     language = detect_language(files)
 
     project = Project(
         id=project_id,
         user_id=current_user.id,
-        name=Path(file.filename).stem,
+        name=Path(filename).stem,
         source_type="upload",
-        filename=file.filename,
+        filename=filename,
         language=language,
         total_files=len(files),
         status="queued",
         progress=0,
+        current_stage="Uploaded",
         upload_blob=upload_bytes,
     )
     db.add(project)
@@ -374,7 +753,7 @@ async def upload_project(
         "success": True,
         "message": "Project uploaded and extracted successfully.",
         "project_id": project_id,
-        "filename": file.filename,
+        "filename": filename,
         "language": language,
         "total_files": len(files),
         "python_files": len([f for f in files if f.suffix == ".py"]),
@@ -383,7 +762,7 @@ async def upload_project(
     }
 
 
-@app.post("/projects/{project_id}/analyze")
+@app.post("/projects/{project_id}/analyze", tags=["Projects"], summary="Run multi-agent analysis for an uploaded project")
 def analyze_project(
     project_id: str,
     current_user: User = Depends(get_current_user),
@@ -394,26 +773,51 @@ def analyze_project(
     project = db.get(Project, project_id)
 
     if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Project not found.")
+        raise_api_error("NOT_FOUND", "Project not found.", status.HTTP_404_NOT_FOUND)
 
-    restore_uploaded_project(project, project_dir, extracted_dir)
+    try:
+        restore_uploaded_project(project, project_dir, extracted_dir)
+    except ArchiveValidationError as exc:
+        update_project_status(
+            db,
+            project_id,
+            current_user.id,
+            "failed",
+            error=exc.message,
+            current_stage="Archive validation failed",
+        )
+        raise_api_error(exc.code, exc.message, exc.status_code)
 
     if not extracted_dir.exists():
-        raise HTTPException(status_code=404, detail="Extracted project folder not found.")
+        raise_api_error("NOT_FOUND", "Extracted project folder not found.", status.HTTP_404_NOT_FOUND)
 
-    update_project_status(db, project_id, current_user.id, "running", 5)
+    update_project_status(db, project_id, current_user.id, "running", 5, current_stage="Preparing analysis")
     project_name = project.name or project_id
     zip_files = list(project_dir.glob("*.zip"))
 
     if zip_files:
         project_name = zip_files[0].stem
 
-    orchestrator = AgentOrchestrator()
-    report = orchestrator.analyze(
-        project_dir=extracted_dir,
-        project_id=project_id,
-        project_name=project_name,
-    )
+    try:
+        orchestrator = AgentOrchestrator()
+        report = orchestrator.analyze(
+            project_dir=extracted_dir,
+            project_id=project_id,
+            project_name=project_name,
+            on_progress=make_progress_callback(db, project_id, current_user.id),
+        )
+    except Exception:
+        logger.exception("ZIP analysis failed for project %s", project_id)
+        public_message = "Analysis failed while processing this project."
+        update_project_status(
+            db,
+            project_id,
+            current_user.id,
+            "failed",
+            error=public_message,
+            current_stage="Analysis failed",
+        )
+        raise_api_error("ANALYSIS_FAILED", public_message, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     metadata = save_analysis_report(report, user_id=current_user.id, db=db)
 
@@ -425,7 +829,7 @@ def analyze_project(
     }
 
 
-@app.post("/projects/github")
+@app.post("/projects/github", tags=["Projects"], summary="Start analysis for a public GitHub repository")
 def analyze_github_repository(
     request: GitHubAnalyzeRequest,
     background_tasks: BackgroundTasks,
@@ -434,11 +838,17 @@ def analyze_github_repository(
 ):
     url = request.url.strip()
 
-    if not url.startswith("https://github.com/"):
-        raise HTTPException(status_code=400, detail="Only GitHub HTTPS repositories are supported.")
+    parsed = urlparse(url)
+    path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or len(path_parts) < 2:
+        raise_api_error(
+            "INVALID_GITHUB_URL",
+            "Enter a valid public GitHub HTTPS repository URL.",
+            status.HTTP_400_BAD_REQUEST,
+        )
 
     project_id = str(uuid.uuid4())
-    project_name = url.rstrip("/").split("/")[-1]
+    project_name = path_parts[1].removesuffix(".git")
 
     project_dir = UPLOAD_DIR / project_id
     extracted_dir = project_dir / "extracted"
@@ -453,8 +863,9 @@ def analyze_github_repository(
             name=project_name,
             source_type="github",
             source_url=url,
-            status="running",
+            status="queued",
             progress=0,
+            current_stage="Queued",
         )
     )
     db.commit()
@@ -472,11 +883,11 @@ def analyze_github_repository(
         "message": "GitHub analysis started.",
         "project_id": project_id,
         "project_name": project_name,
-        "status": "running",
+        "status": "queued",
     }
 
 
-@app.get("/analysis/{project_id}/progress")
+@app.get("/analysis/{project_id}/progress", tags=["Analysis"], summary="Get persisted analysis progress")
 def analysis_progress(
     project_id: str,
     current_user: User = Depends(get_current_user),
@@ -484,23 +895,25 @@ def analysis_progress(
 ):
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+        raise_api_error("NOT_FOUND", "Analysis not found.", status.HTTP_404_NOT_FOUND)
 
     progress = get_progress(project_id)
 
     if progress is None:
+        total_agents = len(AGENT_ORDER) if project.status in {"running", "completed", "failed"} else 0
+        completed_agents = total_agents if project.status == "completed" else 0
         return {
             "project_id": project.id,
             "project_name": project.name,
             "status": project.status,
             "progress": project.progress,
-            "current_agent": project.status.title(),
-            "started_at": project.created_at.isoformat() if project.created_at else None,
-            "finished_at": project.completed_at.isoformat() if project.completed_at else None,
-            "elapsed_seconds": 0,
+            "current_agent": project.current_stage or project.status.title(),
+            "started_at": _now_iso(project.started_at or project.created_at),
+            "finished_at": _now_iso(project.completed_at),
+            "elapsed_seconds": _seconds_since(project.started_at or project.created_at) if project.status == "running" else 0,
             "eta_seconds": None,
-            "completed_agents": 0,
-            "total_agents": 0,
+            "completed_agents": completed_agents,
+            "total_agents": total_agents,
             "agents": [],
             "error": project.error,
         }
@@ -508,7 +921,7 @@ def analysis_progress(
     return progress
 
 
-@app.get("/projects")
+@app.get("/projects", tags=["Projects"], summary="List current user's projects")
 def get_projects(
     source_type: str | None = None,
     status_filter: str | None = None,
@@ -527,7 +940,7 @@ def get_projects(
     return {"success": True, "projects": [project_summary(project) for project in projects]}
 
 
-@app.get("/reports")
+@app.get("/reports", tags=["Reports"], summary="List current user's persisted reports")
 def get_reports(
     search: str | None = None,
     status_filter: str | None = None,
@@ -538,7 +951,16 @@ def get_reports(
     reports = list_reports(user_id=current_user.id, db=db)
     if search:
         needle = search.lower()
-        reports = [report for report in reports if needle in str(report.get("project_name", "")).lower()]
+        reports = [
+            report for report in reports
+            if needle in " ".join([
+                str(report.get("project_name", "")),
+                str(report.get("source_url", "")),
+                str(report.get("language", "")),
+                " ".join(report.get("frameworks", []) or []),
+                str(report.get("status", "")),
+            ]).lower()
+        ]
     if status_filter:
         reports = [report for report in reports if report.get("status") == status_filter]
     reverse = sort != "oldest"
@@ -549,7 +971,7 @@ def get_reports(
     }
 
 
-@app.get("/reports/{project_id}")
+@app.get("/reports/{project_id}", tags=["Reports"], summary="Load a persisted analysis report")
 def get_report(
     project_id: str,
     current_user: User = Depends(get_current_user),
@@ -558,7 +980,7 @@ def get_report(
     report = load_report(project_id, user_id=current_user.id, db=db)
 
     if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
+        raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
 
     return {
         "success": True,
@@ -566,38 +988,27 @@ def get_report(
     }
 
 
-@app.get("/reports/{project_id}/json")
+@app.get("/reports/{project_id}/json", tags=["Reports"], summary="Download a JSON report export")
 def download_report_json(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    record = get_report_record(project_id, current_user.id, db)
-    if record:
-        return Response(
-            content=record.report_json,
-            media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=testpilot-report-{project_id}.json"},
-        )
-
-    path = get_report_json_path(project_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="JSON report not found.")
-
-    return FileResponse(
-        path,
+    record = owned_report_or_404(project_id, current_user.id, db)
+    return Response(
+        content=record.report_json,
         media_type="application/json",
-        filename=f"testpilot-report-{project_id}.json",
+        headers={"Content-Disposition": f"attachment; filename=testpilot-report-{project_id}.json"},
     )
 
 
-@app.get("/reports/{project_id}/pdf")
+@app.get("/reports/{project_id}/pdf", tags=["Reports"], summary="Download a PDF report export")
 def download_report_pdf(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    record = get_report_record(project_id, current_user.id, db)
+    record = owned_report_or_404(project_id, current_user.id, db)
     if record and record.pdf_blob:
         return Response(
             content=record.pdf_blob,
@@ -605,27 +1016,36 @@ def download_report_pdf(
             headers={"Content-Disposition": f"attachment; filename=testpilot-report-{project_id}.pdf"},
         )
 
-    path = get_report_pdf_path(project_id)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="PDF report not found.")
+    try:
+        report_data = json.loads(record.report_json)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "report.pdf"
+            generate_pdf_report(pdf_path, report_data)
+            pdf_blob = pdf_path.read_bytes()
+        record.pdf_blob = pdf_blob
+        db.commit()
+        return Response(
+            content=pdf_blob,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=testpilot-report-{project_id}.pdf"},
+        )
+    except Exception:
+        logger.exception("PDF export failed for project %s.", project_id)
+        raise_api_error(
+            "REPORT_NOT_READY",
+            "PDF report is not available for this analysis yet.",
+            status.HTTP_404_NOT_FOUND,
+        )
 
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=f"testpilot-report-{project_id}.pdf",
-    )
 
-
-@app.get("/reports/{project_id}/csv")
+@app.get("/reports/{project_id}/csv", tags=["Reports"], summary="Download a CSV report export")
 def download_report_csv(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    report = load_report(project_id, user_id=current_user.id, db=db)
-
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
+    record = owned_report_or_404(project_id, current_user.id, db)
+    report = json.loads(record.report_json)
 
     output = StringIO()
     writer = csv.writer(output)
@@ -637,7 +1057,7 @@ def download_report_csv(
     writer.writerow(["Security", report.get("security_score")])
     writer.writerow(["Testing", report.get("test_score")])
     writer.writerow(["Security Findings", len(report.get("security_findings", []))])
-    writer.writerow(["Generated Tests", len(report.get("generated_tests", []))])
+    writer.writerow(["Generated Test Candidates", len(report.get("generated_tests", []))])
     writer.writerow(["Recommendations", len(report.get("recommendations", []))])
 
     return Response(
@@ -647,13 +1067,13 @@ def download_report_csv(
     )
 
 
-@app.get("/reports/{project_id}/markdown")
+@app.get("/reports/{project_id}/markdown", tags=["Reports"], summary="Download a Markdown report export")
 def download_report_markdown(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    record = get_report_record(project_id, current_user.id, db)
+    record = owned_report_or_404(project_id, current_user.id, db)
     if record and record.markdown_text:
         return PlainTextResponse(
             record.markdown_text,
@@ -661,12 +1081,10 @@ def download_report_markdown(
             headers={"Content-Disposition": f"attachment; filename=testpilot-{project_id}.md"},
         )
 
-    report = load_report(project_id, user_id=current_user.id, db=db)
-
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
-
+    report = json.loads(record.report_json)
     md = build_markdown_report(report)
+    record.markdown_text = md
+    db.commit()
 
     return PlainTextResponse(
         md,
@@ -675,7 +1093,7 @@ def download_report_markdown(
     )
 
 
-@app.get("/reports/compare/{first_id}/{second_id}")
+@app.get("/reports/compare/{first_id}/{second_id}", tags=["Reports"], summary="Compare two owned reports")
 def compare_reports(
     first_id: str,
     second_id: str,
@@ -686,7 +1104,7 @@ def compare_reports(
     second = load_report(second_id, user_id=current_user.id, db=db)
 
     if not first or not second:
-        raise HTTPException(status_code=404, detail="One or both reports not found.")
+        raise_api_error("NOT_FOUND", "One or both reports not found.", status.HTTP_404_NOT_FOUND)
 
     def diff(key):
         return round(float(second.get(key, 0)) - float(first.get(key, 0)), 2)
@@ -713,7 +1131,7 @@ def compare_reports(
     }
 
 
-@app.get("/dashboard/summary")
+@app.get("/dashboard/summary", tags=["Dashboard"], summary="Get dashboard analytics summary")
 def dashboard_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -730,6 +1148,11 @@ def dashboard_summary(
                 "avg_security": 0,
                 "avg_testing": 0,
                 "latest_reports": [],
+                "trend": [],
+                "framework_distribution": {},
+                "risk_distribution": {},
+                "security_findings": 0,
+                "generated_tests": 0,
             },
         }
 
@@ -744,19 +1167,22 @@ def dashboard_summary(
             "quality_score": report.get("quality_score", 0),
             "security_score": report.get("security_score", 0),
             "test_score": report.get("test_score", 0),
-            "coverage_percent": report.get("coverage", {}).get("coverage_percent", 0),
-            "created_at": report.get("metadata", {}).get("created_at"),
+            "coverage_percent": report.get("coverage_percent", 0),
+            "created_at": report.get("created_at"),
         }
         for report in reports[:20]
     ]
 
     frameworks = {}
     risk_levels = {}
+    total_security_findings = 0
+    total_generated_tests = 0
     for report in reports:
-        intelligence = report.get("metadata", {}).get("project_intelligence", {})
-        for framework in intelligence.get("frameworks", []):
+        total_security_findings += int(report.get("security_findings_count", 0) or 0)
+        total_generated_tests += int(report.get("generated_tests_count", 0) or 0)
+        for framework in report.get("frameworks", []) or []:
             frameworks[framework] = frameworks.get(framework, 0) + 1
-        risk = report.get("metadata", {}).get("ai_insights", {}).get("risk_level", "Unknown")
+        risk = report.get("risk_level", "Unknown")
         risk_levels[risk] = risk_levels.get(risk, 0) + 1
 
     return {
@@ -771,46 +1197,45 @@ def dashboard_summary(
             "trend": trend,
             "framework_distribution": frameworks,
             "risk_distribution": risk_levels,
+            "security_findings": total_security_findings,
+            "generated_tests": total_generated_tests,
         },
     }
 
 
-@app.delete("/reports/{project_id}")
+@app.delete("/reports/{project_id}", tags=["Reports"], summary="Delete one owned report and project")
 def delete_report(
     project_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    project = db.get(Project, project_id)
+    if not project or project.user_id != current_user.id:
+        raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
+
     if delete_report_record(project_id, current_user.id, db):
+        remove_owned_project_artifacts(project_id)
         return {
             "success": True,
             "message": "Report deleted successfully.",
             "project_id": project_id,
         }
 
-    report_dir = REPORTS_DIR / project_id
-
-    if not report_dir.exists():
-        raise HTTPException(status_code=404, detail="Report not found.")
-
-    shutil.rmtree(report_dir)
-
-    return {
-        "success": True,
-        "message": "Report deleted successfully.",
-        "project_id": project_id,
-    }
+    raise_api_error("NOT_FOUND", "Report not found.", status.HTTP_404_NOT_FOUND)
 
 
-@app.delete("/reports")
+@app.delete("/reports", tags=["Reports"], summary="Delete all current user's reports and projects")
 def clear_reports(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     reports = db.query(Project).filter(Project.user_id == current_user.id).all()
+    owned_project_ids = [project.id for project in reports]
     for project in reports:
         db.delete(project)
     db.commit()
+    for project_id in owned_project_ids:
+        remove_owned_project_artifacts(project_id)
 
     return {
         "success": True,

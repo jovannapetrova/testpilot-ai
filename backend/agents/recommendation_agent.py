@@ -1,5 +1,5 @@
 from __future__ import annotations
-from models.schemas import FindingSeverity, Recommendation
+from models.schemas import Recommendation
 from services.llm_service import LLMService
 
 class RecommendationAgent:
@@ -82,33 +82,46 @@ class RecommendationAgent:
                 estimated_effort="medium",
                 business_impact="Reduces breach and compliance risk before release.",
                 why="Security findings in production code can become exploitable defects.",
+                affected_files=files,
+                evidence=f"{len(real_candidates)} real secret/security candidate(s) were grouped by the security agent.",
             ))
         elif reference_findings:
             files = self._target_files(reference_findings)
             title = "Validate CI/config secret references" if any(getattr(f, "category", "") == "ci_secret_reference" for f in reference_findings) else "Review low-confidence secret references"
             items.append(Recommendation(
                 title=title,
-                priority=FindingSeverity.low,
+                priority="low",
                 category="security",
                 description=f"Secret-like findings are low-confidence references/placeholders in {', '.join(files) or 'non-production/config contexts'}.",
                 suggested_action="Confirm references point to managed secrets, keep fixture values fake, and avoid logging resolved secret values.",
                 estimated_effort="small",
                 business_impact="Reduces audit noise without treating placeholders as active incidents.",
                 why="The findings do not look like exposed live credentials, but they should be validated for deployment hygiene.",
+                affected_files=files,
+                evidence=f"{len(reference_findings)} low-confidence reference or fixture finding(s) were detected.",
             ))
 
         if coverage < 60:
-            skipped = generation_metadata.get("skipped_generation_reasons", {})
-            skipped_text = ", ".join(list(skipped.keys())[:2]) or "core untested production paths"
+            executable = int(generation_metadata.get("executable_tests", 0) or 0)
+            smoke = int(generation_metadata.get("smoke_tests", 0) or 0)
+            human_design = generation_metadata.get("needs_human_test_design", [])
+            human_count = len(human_design) if isinstance(human_design, list) else int(human_design or 0)
+            generated_text = (
+                f"{executable + smoke} generated test candidate(s) exist, while {human_count} additional production target(s) need fixtures or domain-specific test design."
+                if executable or smoke or human_count
+                else "No generated executable candidates were available for the most important untested paths."
+            )
             items.append(Recommendation(
                 title="Raise coverage on core production paths",
                 priority="high" if coverage < 30 else "medium",
                 category="testing",
-                description=f"Coverage is {coverage}%, which is below an enterprise release-confidence threshold.",
-                suggested_action=f"Add executable tests around {skipped_text}; prioritize modules listed as uncovered or requiring human fixtures.",
+                description=f"Coverage is {coverage}%, which is below an enterprise release-confidence threshold. {generated_text}",
+                suggested_action="Prioritize executable tests for uncovered production files, then convert human-design targets into fixture-backed unit or API tests.",
                 estimated_effort="medium",
                 business_impact="Improves release confidence and reduces regression cost.",
                 why="Low coverage means refactoring and security fixes are harder to validate safely.",
+                affected_files=(coverage_result.uncovered_files[:5] if coverage_result else []),
+                evidence="Coverage agent marked this result as estimated or below the desired threshold.",
             ))
 
         if avg_complexity > 8:
@@ -122,6 +135,8 @@ class RecommendationAgent:
                 estimated_effort="medium",
                 business_impact="Reduces change failure rate and review cycle time.",
                 why="Complex code has a higher defect rate and slows feature delivery.",
+                affected_files=files,
+                evidence=f"Average complexity is {round(avg_complexity, 2)}.",
             ))
 
         return items

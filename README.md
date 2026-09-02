@@ -22,7 +22,7 @@ React Dashboard -> FastAPI Backend -> Agent Orchestrator
 - Frontend: React, Vite, Axios, Recharts, Framer Motion, Lucide React
 - Backend: FastAPI, Python 3.11, Pydantic
 - Persistence: SQLAlchemy with SQLite for development and PostgreSQL-ready production configuration
-- Auth: JWT sessions with bcrypt password hashing
+- Auth: JWT sessions with bcrypt password hashing, refresh sessions, password reset tokens and optional magic-link sign-in
 - Quality/Security: Bandit, Radon, Pytest, Coverage.py
 - Reports: ReportLab + JSON
 - Free deployment: Vercel frontend + Render backend
@@ -52,6 +52,19 @@ npm run dev
 
 Frontend: http://localhost:5173
 
+### Tests
+
+```bash
+cd backend
+pytest
+```
+
+```bash
+cd frontend
+npm test
+npm run build
+```
+
 ## Notes for diploma defense
 
 Use `backend/sample_projects/vulnerable_python_app` as the main demo input. It contains intentional issues so agents can detect security and quality problems.
@@ -62,7 +75,7 @@ TestPilot AI is ready for a split deployment with the backend on Render and the 
 
 ### Render Backend
 
-Use the root-level `render.yaml` Blueprint when connecting the GitHub repository to Render. It pins Python to `3.11.9`, sets `backend` as the service root, and configures the health check and startup command for Render Free.
+Use the root-level `render.yaml` Blueprint when connecting the GitHub repository to Render. It pins Python to `3.11.9`, sets `backend` as the service root, configures the health check/startup command for Render Free, and asks Render for deployment-specific frontend URLs instead of committing them.
 
 - Root directory: `backend`
 - Build command: `python -m pip install --upgrade pip && pip install -r requirements.txt`
@@ -77,14 +90,26 @@ DATABASE_URL=<managed-postgres-connection-string>
 JWT_SECRET=<generated-secret>
 LOG_LEVEL=INFO
 CORS_ORIGINS=https://your-vercel-app.vercel.app
+CORS_ORIGIN_REGEX=https://.*\.vercel\.app
 ENABLE_TEST_EXECUTION=false
+FRONTEND_BASE_URL=https://your-vercel-app.vercel.app
+SMTP_HOST=<optional-smtp-host>
+SMTP_USERNAME=<optional-smtp-username>
+SMTP_PASSWORD=<optional-smtp-password>
+SMTP_FROM=<optional-from-address>
+MAX_UPLOAD_SIZE_MB=50
+MAX_EXTRACTED_SIZE_MB=150
+MAX_ARCHIVE_FILES=5000
 ```
+
+The Blueprint generates `JWT_SECRET` and attaches the managed PostgreSQL `DATABASE_URL`. Set `CORS_ORIGINS` and `FRONTEND_BASE_URL` to the deployed frontend URL during Blueprint setup.
 
 ### Vercel Frontend
 
 - Root directory: `frontend`
 - Build command: `npm run build`
 - Output directory: `dist`
+- Node version: `>=20.19.0`
 
 Required environment variable:
 

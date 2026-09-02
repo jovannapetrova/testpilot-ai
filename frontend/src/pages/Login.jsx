@@ -1,37 +1,61 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
-import { forgotPassword } from "../api/client";
+import { Loader2, Mail, ShieldCheck } from "lucide-react";
+import { requestMagicLink } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { authNotice, clearAuthNotice, login } = useAuth();
   const [form, setForm] = useState({ email: "", password: "", remember_me: true });
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState("info");
   const [loading, setLoading] = useState(false);
+  const [magicLoading, setMagicLoading] = useState(false);
+  const [slowLogin, setSlowLogin] = useState(false);
+  const slowLoginTimer = useRef(null);
+
+  useEffect(() => () => clearTimeout(slowLoginTimer.current), []);
 
   const submit = async (event) => {
     event.preventDefault();
+    clearTimeout(slowLoginTimer.current);
     setLoading(true);
+    setSlowLogin(false);
     setMessage("");
+    clearAuthNotice?.();
+    slowLoginTimer.current = setTimeout(() => setSlowLogin(true), 4500);
     try {
       await login(form);
       navigate("/dashboard");
     } catch (error) {
+      setMessageTone("error");
       setMessage(error.userMessage || "Unable to sign in. Check your credentials and try again.");
     } finally {
+      clearTimeout(slowLoginTimer.current);
       setLoading(false);
     }
   };
 
-  const handleForgot = async () => {
+  const handleMagicLink = async () => {
     if (!form.email) {
-      setMessage("Enter your email first, then request password reset instructions.");
+      setMessageTone("error");
+      setMessage("Enter your email first, then request a sign-in link.");
       return;
     }
-    const result = await forgotPassword(form.email);
-    setMessage(result.message);
+
+    try {
+      setMagicLoading(true);
+      setMessage("");
+      const result = await requestMagicLink({ email: form.email });
+      setMessageTone(result.delivery_configured ? "success" : "info");
+      setMessage(result.message || "If this account exists, a sign-in link will be sent.");
+    } catch (error) {
+      setMessageTone("error");
+      setMessage(error.userMessage || "Unable to request a sign-in link right now.");
+    } finally {
+      setMagicLoading(false);
+    }
   };
 
   return (
@@ -77,15 +101,45 @@ export default function Login() {
               />
               Remember me
             </label>
-            <button type="button" className="link-button" onClick={handleForgot}>
+            <Link className="link-button" to="/forgot-password">
               Forgot password?
-            </button>
+            </Link>
           </div>
 
-          {message && <div className="auth-message">{message}</div>}
+          {(authNotice || message || slowLogin) && (
+            <div className={`auth-message ${messageTone === "error" ? "auth-message-error" : ""}`}>
+              {authNotice || message || "Server is taking longer than usual. Please keep this page open."}
+            </div>
+          )}
 
           <button className="btn btn-primary auth-submit" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? (
+              <>
+                <Loader2 className="spin" size={17} />
+                Signing you in...
+              </>
+            ) : (
+              "Sign in"
+            )}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-ghost auth-submit"
+            onClick={handleMagicLink}
+            disabled={loading || magicLoading}
+          >
+            {magicLoading ? (
+              <>
+                <Loader2 className="spin" size={17} />
+                Sending link...
+              </>
+            ) : (
+              <>
+                <Mail size={17} />
+                Email me a sign-in link
+              </>
+            )}
           </button>
         </form>
 

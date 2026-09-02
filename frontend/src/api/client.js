@@ -48,14 +48,19 @@ api.interceptors.response.use(
       return api(config);
     }
 
+    const structured = error.response?.data?.error || error.response?.data?.detail?.error;
+    const fallbackDetail = error.response?.data?.detail;
     const message =
-      error.response?.data?.detail ||
+      structured?.message ||
+      (typeof fallbackDetail === "string" ? fallbackDetail : "") ||
       error.response?.data?.message ||
       (status === 404 ? "The requested item could not be found. It may have been deleted or moved." : "") ||
       error.message ||
       "API request failed.";
 
     error.userMessage = message;
+    error.code = structured?.code || error.response?.data?.code || "";
+    error.details = structured?.details || null;
     return Promise.reject(error);
   },
 );
@@ -77,14 +82,33 @@ export async function refreshSession(refreshToken) {
   return response.data;
 }
 
+export async function requestPasswordReset(email) {
+  const response = await api.post("/auth/forgot-password", { email });
+  return response.data;
+}
+
+export async function resetPassword(payload) {
+  const response = await api.post("/auth/reset-password", payload);
+  return response.data;
+}
+
+export async function requestMagicLink(payload) {
+  const response = await api.post("/auth/magic-link/request", payload);
+  return response.data;
+}
+
+export async function verifyMagicLink(token) {
+  const response = await api.post("/auth/magic-link/verify", { token });
+  return response.data;
+}
+
 export async function logoutUser() {
   const response = await api.post("/auth/logout");
   return response.data;
 }
 
 export async function forgotPassword(email) {
-  const response = await api.post("/auth/forgot-password", { email });
-  return response.data;
+  return requestPasswordReset(email);
 }
 
 export async function getCurrentUser() {
@@ -123,8 +147,8 @@ export async function analyzeProject(projectId) {
   return response.data;
 }
 
-export async function getReports() {
-  const response = await api.get("/reports");
+export async function getReports(params = {}) {
+  const response = await api.get("/reports", { params });
   return response.data;
 }
 
@@ -147,6 +171,11 @@ export function getReportPdfUrl(projectId) {
 }
 export async function getDashboardSummary() {
   const response = await api.get("/dashboard/summary");
+  return response.data;
+}
+
+export async function getHealth() {
+  const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 15000 });
   return response.data;
 }
 

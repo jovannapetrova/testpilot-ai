@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 
 export default function SecurityFindingsList({ findings = [] }) {
+  const normalizeSeverity = (value) => String(value || "info").split(".").pop().toLowerCase();
   const groupedFindings = useMemo(() => {
     const map = new Map();
 
@@ -34,7 +35,7 @@ export default function SecurityFindingsList({ findings = [] }) {
           <div>
             <strong>{item.issue}</strong>
             <p>
-              {item.file} | {item.context || "production"} | confidence: {item.confidence || "medium"}
+              {item.file} | {item.context || "production"} | type: {item.category || item.issue_type || "finding"} | confidence: {item.confidence || "medium"}
               {` | false-positive likelihood: ${item.false_positive_likelihood || "medium"}`}
               {item.count ? ` | ${item.count} occurrence(s)` : ""}
             </p>
@@ -46,8 +47,8 @@ export default function SecurityFindingsList({ findings = [] }) {
             ) : null}
           </div>
 
-          <span className={`severity ${item.severity}`}>
-            {item.severity} x {item.count}
+          <span className={`severity ${normalizeSeverity(item.severity)}`}>
+            {normalizeSeverity(item.severity)} x {item.count}
           </span>
         </div>
       ))}

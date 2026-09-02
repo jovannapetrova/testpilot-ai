@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { changePassword, updateCurrentUser } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import Toast from "../components/ui/Toast";
+import ErrorState from "../components/ui/ErrorState";
 
 export default function Profile() {
   const { user, setSession, session } = useAuth();
@@ -9,20 +11,39 @@ export default function Profile() {
     avatar_url: user?.avatar_url || "",
   });
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
-  const [message, setMessage] = useState("");
+  const [toast, setToast] = useState("");
+  const [error, setError] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   const saveProfile = async (event) => {
     event.preventDefault();
-    const result = await updateCurrentUser(profile);
-    setSession({ ...session, user: result.user }, true);
-    setMessage("Profile updated successfully.");
+    try {
+      setSavingProfile(true);
+      setError("");
+      const result = await updateCurrentUser(profile);
+      setSession({ ...session, user: result.user }, session?.remember_me ?? true);
+      setToast("Profile updated successfully.");
+    } catch (err) {
+      setError(err.userMessage || "Unable to update your profile.");
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const savePassword = async (event) => {
     event.preventDefault();
-    await changePassword(password);
-    setPassword({ current_password: "", new_password: "" });
-    setMessage("Password changed successfully.");
+    try {
+      setSavingPassword(true);
+      setError("");
+      await changePassword(password);
+      setPassword({ current_password: "", new_password: "" });
+      setToast("Password changed successfully.");
+    } catch (err) {
+      setError(err.userMessage || "Unable to change your password.");
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   return (
@@ -33,7 +54,7 @@ export default function Profile() {
         <p>Manage your account details, password and workspace identity.</p>
       </div>
 
-      {message && <div className="auth-message profile-message">{message}</div>}
+      {error ? <ErrorState title="Account update failed" message={error} /> : null}
 
       <div className="settings-grid">
         <form className="card settings-card auth-form" onSubmit={saveProfile}>
@@ -53,7 +74,9 @@ export default function Profile() {
               placeholder="https://..."
             />
           </label>
-          <button className="btn btn-primary">Save profile</button>
+          <button className="btn btn-primary" disabled={savingProfile}>
+            {savingProfile ? "Saving profile..." : "Save profile"}
+          </button>
         </form>
 
         <form className="card settings-card auth-form" onSubmit={savePassword}>
@@ -77,7 +100,9 @@ export default function Profile() {
               required
             />
           </label>
-          <button className="btn btn-primary">Change password</button>
+          <button className="btn btn-primary" disabled={savingPassword}>
+            {savingPassword ? "Changing password..." : "Change password"}
+          </button>
         </form>
 
         <div className="card settings-card">
@@ -87,6 +112,8 @@ export default function Profile() {
           <p>Last login: {user?.last_login_at ? new Date(user.last_login_at).toLocaleString() : "First session"}</p>
         </div>
       </div>
+
+      <Toast message={toast} onClose={() => setToast("")} />
     </div>
   );
 }

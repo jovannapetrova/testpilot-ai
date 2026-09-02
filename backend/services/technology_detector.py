@@ -414,13 +414,28 @@ class TechnologyDetector:
         return boundaries[:25]
 
     def _repository_shape(self, rel_paths: set[str]) -> dict:
+        manifest_paths = [
+            path for path in rel_paths
+            if path.endswith(("package.json", "pyproject.toml", "pom.xml", "build.gradle", "build.gradle.kts", "go.mod", "cargo.toml"))
+        ]
+        workspace_files = {
+            "pnpm-workspace.yaml",
+            "lerna.json",
+            "turbo.json",
+            "rush.json",
+            "nx.json",
+        }
+        has_workspace_signal = bool(rel_paths & workspace_files)
+        nested_manifests = [path for path in manifest_paths if "/" in path]
         return {
             "has_src": any(path.startswith("src/") or "/src/" in path for path in rel_paths),
             "has_app": any(path.startswith("app/") or "/app/" in path for path in rel_paths),
             "has_tests_dir": any(path.startswith("tests/") or "/tests/" in path for path in rel_paths),
             "has_ci": any(path.startswith(".github/") or "workflows/" in path for path in rel_paths),
             "has_infra": any(token in path for path in rel_paths for token in ["dockerfile", "docker-compose", "k8s/", "helm/"]),
-            "looks_monorepo": sum(1 for path in rel_paths if path.endswith("package.json") or path.endswith("pyproject.toml") or path.endswith("pom.xml")) > 1,
+            "looks_monorepo": has_workspace_signal or len(nested_manifests) > 1,
+            "workspace_signal": has_workspace_signal,
+            "nested_manifest_count": len(nested_manifests),
         }
 
     def _entrypoints(self, rel_paths: set[str]) -> list[str]:

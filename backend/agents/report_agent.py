@@ -21,8 +21,8 @@ class ReportAgent:
         json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
         self._write_pdf(report, pdf_path)
 
-        report.report_json_url = f"/api/reports/{json_path.name}"
-        report.report_pdf_url = f"/api/reports/{pdf_path.name}"
+        report.report_json_url = f"/reports/{report.project_id}/json"
+        report.report_pdf_url = f"/reports/{report.project_id}/pdf"
 
         return report
 
@@ -108,11 +108,11 @@ class ReportAgent:
         ], header=True))
 
         story.append(Spacer(1, 16))
-        story.append(Paragraph("Generated Tests Summary", styles["Heading2"]))
+        story.append(Paragraph("Generated Test Candidates Summary", styles["Heading2"]))
         story.append(self._table([
             ["Metric", "Value"],
-            ["Generated tests", test_summary.get("total", len(report.generated_tests))],
-            ["Executable tests", test_summary.get("executable_tests", len(report.generated_tests))],
+            ["Generated test candidates", test_summary.get("total", len(report.generated_tests))],
+            ["Executable candidates", test_summary.get("executable_tests", len(report.generated_tests))],
             ["Smoke tests", test_summary.get("smoke_tests", 0)],
             ["Needs human test design", test_summary.get("needs_human_test_design", 0)],
             ["Types", ", ".join(f"{k}: {v}" for k, v in test_summary.get("by_type", {}).items())],

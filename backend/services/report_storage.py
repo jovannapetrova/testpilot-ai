@@ -60,10 +60,10 @@ def build_markdown_report(report: dict) -> str:
 | Security | {report.get("security_score")} |
 | Testing | {report.get("test_score")} |
 
-## AI Insights
+## AI Analysis Summary
 {insights.get("summary", "No AI insights available.")}
 
-## Project Intelligence
+## Project Profile
 - Project type: {intelligence.get("project_type")}
 - Language: {intelligence.get("primary_language")}
 - Frameworks: {", ".join(intelligence.get("frameworks", [])) or "None"}
@@ -71,7 +71,7 @@ def build_markdown_report(report: dict) -> str:
 
 ## Findings
 - Security findings: {len(report.get("security_findings", []))}
-- Generated tests: {len(report.get("generated_tests", []))}
+- Generated test candidates: {len(report.get("generated_tests", []))}
 - Recommendations: {len(report.get("recommendations", []))}
 
 ## Recommendations
@@ -109,6 +109,7 @@ def save_analysis_report(report: Any, user_id: str | None = None, db: Session | 
         if project and project.user_id == user_id:
             project.status = "completed"
             project.progress = 100
+            project.current_stage = "Completed"
             project.completed_at = datetime.now(timezone.utc)
             project.updated_at = datetime.now(timezone.utc)
 
@@ -155,15 +156,36 @@ def save_analysis_report(report: Any, user_id: str | None = None, db: Session | 
 
 
 def _db_report_metadata(report: Report) -> dict:
+    try:
+        report_data = json.loads(report.report_json)
+    except Exception:
+        report_data = {}
+
+    metadata = report_data.get("metadata", {}) if isinstance(report_data, dict) else {}
+    intelligence = metadata.get("project_intelligence", {}) or {}
+    insights = metadata.get("ai_insights", {}) or {}
+    coverage = report_data.get("coverage", {}) if isinstance(report_data, dict) else {}
+    project = report.project
+
     return {
         "project_id": report.project_id,
         "project_name": report.project_name,
         "language": report.language,
         "status": report.status,
+        "source_type": project.source_type if project else None,
+        "source_url": project.source_url if project else None,
         "overall_score": report.overall_score,
         "quality_score": report.quality_score,
         "security_score": report.security_score,
         "test_score": report.test_score,
+        "coverage_percent": coverage.get("coverage_percent", 0),
+        "coverage_estimated": coverage.get("estimated", False),
+        "security_findings_count": len(report_data.get("security_findings", [])) if isinstance(report_data, dict) else 0,
+        "generated_tests_count": len(report_data.get("generated_tests", [])) if isinstance(report_data, dict) else 0,
+        "recommendations_count": len(report_data.get("recommendations", [])) if isinstance(report_data, dict) else 0,
+        "risk_level": insights.get("risk_level", "Unknown"),
+        "frameworks": intelligence.get("frameworks", []),
+        "project_type": intelligence.get("project_type", ""),
         "created_at": report.created_at.isoformat() if report.created_at else None,
         "json_path": None,
         "pdf_path": None,
@@ -395,7 +417,7 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
     )
 
     if insights:
-        story.append(Paragraph("AI Executive Insights", styles["SectionTitle"]))
+        story.append(Paragraph("AI Analysis Summary", styles["SectionTitle"]))
         story.append(Paragraph(str(insights.get("summary", "")), styles["BodyText"]))
         story.append(Spacer(1, 8))
 
@@ -410,7 +432,7 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
                         insights.get("statistics", {}).get("security_findings", 0),
                     ],
                     [
-                        "Generated Tests",
+                        "Generated Test Candidates",
                         insights.get("statistics", {}).get("generated_tests", 0),
                     ],
                 ],
@@ -494,16 +516,16 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
     tests = report.get("generated_tests", [])
 
     if tests:
-        story.append(Paragraph("Generated Tests Summary", styles["SectionTitle"]))
+        story.append(Paragraph("Generated Test Candidates Summary", styles["SectionTitle"]))
 
-        rows = [["Target", "File", "Type"]]
+        rows = [["Target", "File", "Execution"]]
 
         for test in tests[:12]:
             rows.append(
                 [
                     Paragraph(str(test.get("target", "")), styles["SmallText"]),
                     Paragraph(str(test.get("file", "")), styles["SmallText"]),
-                    "AI-generated",
+                    str(test.get("execution_status", "not_executed")),
                 ]
             )
 

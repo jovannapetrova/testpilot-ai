@@ -113,8 +113,19 @@
   box-shadow: var(--shadow-soft);
 }
 
+.project-archive-heading {
+  margin-top: 26px;
+}
+
 .single-workflow {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.project-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(160px, 0.2fr) minmax(160px, 0.2fr);
+  gap: 12px;
+  align-items: center;
 }
 
 .project-search {
@@ -127,6 +138,15 @@
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
+}
+
+.project-toolbar select {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--panel);
 }
 
 .project-search input {
@@ -171,6 +191,83 @@
   cursor: pointer;
 }
 
+.project-card-button.active .project-card {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  box-shadow: var(--shadow);
+}
+
+.project-grid {
+  margin-top: 14px;
+}
+
+.project-card {
+  min-height: 210px;
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+}
+
+.project-card h3,
+.project-card p {
+  margin: 0;
+}
+
+.project-card p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.project-card-header,
+.project-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-source-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--panel));
+}
+
+.project-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.progress-track.compact {
+  height: 8px;
+  margin: 0;
+}
+
+.project-error {
+  color: var(--red) !important;
+  font-weight: 800;
+}
+
+.project-card-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.project-card-footer strong {
+  color: var(--text);
+}
+
+.project-notice,
+.analysis-loading-text,
+.selected-analysis {
+  margin-top: 18px;
+}
+
 .project-card-button:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.25);
   border-radius: var(--radius);
@@ -181,5 +278,9 @@
   .progress-meta {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .project-toolbar {
+    grid-template-columns: 1fr;
   }
 }

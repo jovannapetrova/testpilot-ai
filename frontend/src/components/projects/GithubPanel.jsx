@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitBranch, Loader2, Play } from "lucide-react";
 import {
   analyzeGithubRepository,
@@ -20,6 +20,7 @@ function formatSeconds(value) {
 }
 
 export default function GithubPanel({ onAnalysisComplete }) {
+  const pollTimer = useRef(null);
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
@@ -61,14 +62,17 @@ export default function GithubPanel({ onAnalysisComplete }) {
     };
   };
 
+  useEffect(() => () => clearInterval(pollTimer.current), []);
+
   const pollProgress = (projectId, projectName) => {
-    const timer = setInterval(async () => {
+    clearInterval(pollTimer.current);
+    pollTimer.current = setInterval(async () => {
       try {
         const data = await getAnalysisProgress(projectId);
         hydrateProgress(data);
 
         if (data.status === "completed") {
-          clearInterval(timer);
+          clearInterval(pollTimer.current);
 
           const reportResponse = await getReport(projectId);
           const finalReport = reportResponse.report;
@@ -84,13 +88,13 @@ export default function GithubPanel({ onAnalysisComplete }) {
         }
 
         if (data.status === "failed") {
-          clearInterval(timer);
+          clearInterval(pollTimer.current);
           setStatus("error");
           setMessage(data.error || "Analysis failed.");
           setCurrentAgent("Failed");
         }
       } catch (error) {
-        clearInterval(timer);
+        clearInterval(pollTimer.current);
         setStatus("error");
         setMessage(error.userMessage || "Progress tracking failed.");
       }
@@ -105,6 +109,7 @@ export default function GithubPanel({ onAnalysisComplete }) {
     }
 
     try {
+      clearInterval(pollTimer.current);
       setStatus("running");
       setMessage("GitHub analysis started. Tracking live progress...");
       setSummary(null);
