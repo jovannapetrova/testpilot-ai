@@ -107,6 +107,9 @@ class GeneratedTest(BaseModel):
     execution_safety: str = "safe"
     generated_test_category: str = "unit"
     execution_status: str = "not_executed"
+    execution_readiness: str = "ready_to_execute"
+    execution_reason: str = ""
+    skip_reason: str = ""
     executed: bool = False
     passed: int = 0
     failed: int = 0
@@ -119,6 +122,11 @@ class CoverageResult(BaseModel):
     output: str = ""
     tool: str = ""
     estimated: bool = False
+    measured: bool = False
+    available: bool = False
+    display_label: str = "Not measured"
+    evidence_state: str = "unavailable"
+    estimated_coverage_percent: Optional[float] = None
     reason: str = ""
     low_coverage_reasons: list[str] = Field(default_factory=list)
     uncovered_files: list[str] = Field(default_factory=list)

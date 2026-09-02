@@ -26,12 +26,14 @@ class RecommendationAgent:
             if getattr(finding, "category", "") == "real_secret_candidate"
             or str(getattr(finding, "severity", "")).lower().split(".")[-1] in {"high", "critical"}
         ])
-        raw = self.llm.generate_recommendations({
-            "security_count": real_security_count,
-            "coverage": coverage,
-            "complexity": avg_complexity,
-        })
-        recommendations = [Recommendation(**item) for item in raw]
+        recommendations: list[Recommendation] = []
+        if getattr(self.llm, "provider", "mock") != "mock":
+            raw = self.llm.generate_recommendations({
+                "security_count": real_security_count,
+                "coverage": coverage,
+                "complexity": avg_complexity,
+            })
+            recommendations = [Recommendation(**item) for item in raw]
         recommendations.extend(self._deterministic_recommendations(
             security_count,
             coverage,
@@ -70,6 +72,11 @@ class RecommendationAgent:
             }
         ]
         production_hotspots = self._production_quality_hotspots(quality_metrics)
+        coverage_measured = bool(
+            coverage_result
+            and getattr(coverage_result, "measured", False)
+            and getattr(coverage_result, "available", False)
+        )
 
         if real_candidates:
             files = self._target_files(real_candidates)
@@ -101,27 +108,46 @@ class RecommendationAgent:
                 evidence=f"{len(reference_findings)} low-confidence reference or fixture finding(s) were detected.",
             ))
 
-        if coverage < 60:
+        if not coverage_measured:
             executable = int(generation_metadata.get("executable_tests", 0) or 0)
             smoke = int(generation_metadata.get("smoke_tests", 0) or 0)
             human_design = generation_metadata.get("needs_human_test_design", [])
             human_count = len(human_design) if isinstance(human_design, list) else int(human_design or 0)
-            generated_text = (
-                f"{executable + smoke} generated test candidate(s) exist, while {human_count} additional production target(s) need fixtures or domain-specific test design."
-                if executable or smoke or human_count
-                else "No generated executable candidates were available for the most important untested paths."
-            )
             items.append(Recommendation(
-                title="Raise coverage on core production paths",
+                title="Configure measured coverage before using testing score as release evidence",
+                priority="medium",
+                category="testing",
+                description=(
+                    f"Coverage is not measured for this run ({getattr(coverage_result, 'evidence_state', 'unavailable') if coverage_result else 'unavailable'}). "
+                    f"{executable + smoke} generated candidate(s) are ready for review/execution, and {human_count} target(s) require human fixture design."
+                ),
+                suggested_action="Enable project test execution and coverage collection in a controlled environment, then treat measured coverage as release evidence.",
+                estimated_effort="medium",
+                business_impact="Prevents teams from mistaking generated candidates for executed test coverage.",
+                why="Missing coverage evidence is not the same as measured 0%, but it still limits release confidence.",
+                affected_files=(coverage_result.uncovered_files[:5] if coverage_result else []),
+                evidence=getattr(coverage_result, "reason", "") if coverage_result else "Coverage agent did not produce measured coverage.",
+            ))
+        elif coverage < 60:
+            executable = int(generation_metadata.get("executable_tests", 0) or 0)
+            human_design = generation_metadata.get("needs_human_test_design", [])
+            human_count = len(human_design) if isinstance(human_design, list) else int(human_design or 0)
+            files = coverage_result.uncovered_files[:5] if coverage_result else []
+            scope = ", ".join(files) if files else "core production paths"
+            items.append(Recommendation(
+                title=f"Add behavioral tests for {scope}",
                 priority="high" if coverage < 30 else "medium",
                 category="testing",
-                description=f"Coverage is {coverage}%, which is below an enterprise release-confidence threshold. {generated_text}",
-                suggested_action="Prioritize executable tests for uncovered production files, then convert human-design targets into fixture-backed unit or API tests.",
+                description=(
+                    f"Measured coverage is {coverage}%, below an enterprise release-confidence threshold. "
+                    f"{executable} generated candidate(s) can be reviewed first; {human_count} target(s) need project-specific fixtures."
+                ),
+                suggested_action="Prioritize uncovered production files, add boundary and error-path tests, then rerun coverage to verify the gain.",
                 estimated_effort="medium",
                 business_impact="Improves release confidence and reduces regression cost.",
-                why="Low coverage means refactoring and security fixes are harder to validate safely.",
-                affected_files=(coverage_result.uncovered_files[:5] if coverage_result else []),
-                evidence="Coverage agent marked this result as estimated or below the desired threshold.",
+                why="Low measured coverage means refactoring and security fixes are harder to validate safely.",
+                affected_files=files,
+                evidence=f"Coverage agent measured {coverage}% coverage.",
             ))
 
         if avg_complexity > 8:
@@ -137,6 +163,19 @@ class RecommendationAgent:
                 why="Complex code has a higher defect rate and slows feature delivery.",
                 affected_files=files,
                 evidence=f"Average complexity is {round(avg_complexity, 2)}.",
+            ))
+
+        if not items:
+            items.append(Recommendation(
+                title="Maintain current quality gates and monitor trend changes",
+                priority="low",
+                category="governance",
+                description="The current analysis did not produce high-priority remediation items.",
+                suggested_action="Keep running TestPilot AI before releases and compare future reports against this baseline.",
+                estimated_effort="small",
+                business_impact="Sustains release confidence and keeps regression signals visible.",
+                why="Healthy projects still benefit from trend tracking and explicit release evidence.",
+                evidence="No high-priority security, testing, or quality trigger crossed the configured thresholds.",
             ))
 
         return items
@@ -164,14 +203,22 @@ class RecommendationAgent:
     def _dedupe(self, recommendations: list[Recommendation]) -> list[Recommendation]:
         unique = []
         seen = set()
+        seen_titles = set()
+        seen_actions = set()
         for rec in recommendations:
+            normalized_title = " ".join(rec.title.lower().split())
+            normalized_action = " ".join(rec.suggested_action.lower().split())
             key = (
-                rec.title.lower(),
+                normalized_title,
                 rec.category.lower(),
-                rec.suggested_action.lower(),
+                normalized_action,
             )
             if key in seen:
                 continue
+            if normalized_title in seen_titles or normalized_action in seen_actions:
+                continue
             seen.add(key)
+            seen_titles.add(normalized_title)
+            seen_actions.add(normalized_action)
             unique.append(rec)
         return unique

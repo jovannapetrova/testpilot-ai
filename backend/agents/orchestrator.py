@@ -154,6 +154,7 @@ class AgentOrchestrator:
                 generated_tests,
                 coverage.coverage_percent,
                 test_generation_metadata,
+                coverage_result=coverage,
             )
 
             overall_score = round(
@@ -197,17 +198,34 @@ class AgentOrchestrator:
                     "security_scoring": "context-aware-production-weighted",
                     "security_context_summary": self._security_context_summary(security_findings),
                     "security_summary": self._security_summary(security_findings),
-                    "quality_summary": self._quality_summary(quality_metrics),
+                    "quality_summary": self._quality_summary(quality_metrics, security_findings),
                     "quality_analysis_metadata": quality_analysis_metadata,
                     "coverage_summary": coverage.model_dump(mode="json"),
-                    "generated_tests_summary": self._generated_tests_summary(generated_tests, test_generation_metadata),
+                    "generated_tests_summary": self._generated_tests_summary(
+                        generated_tests,
+                        test_generation_metadata,
+                        coverage,
+                        execute_tests,
+                    ),
                     "test_generation_metadata": test_generation_metadata,
+                    "testing_scoring": self._testing_scoring_summary(
+                        generated_tests,
+                        test_generation_metadata,
+                        coverage,
+                    ),
+                    "assessment_confidence": self._assessment_confidence(
+                        coverage,
+                        quality_analysis_metadata,
+                        test_generation_metadata,
+                    ),
                     "trend_snapshot": {
                         "overall_score": overall_score,
                         "quality_score": quality_score,
                         "security_score": security_score,
                         "test_score": test_score,
                         "coverage_percent": coverage.coverage_percent,
+                        "coverage_display_label": coverage.display_label,
+                        "coverage_measured": coverage.measured,
                     },
                     "quality_scoring": "multi-language-maintainability-complexity",
                     "test_generation_architecture": "strategy-factory",
@@ -267,9 +285,11 @@ class AgentOrchestrator:
         if not metrics:
             return 75.0
 
-        maintainability_average = sum(m.maintainability_index for m in metrics) / len(metrics)
-        complexity_average = sum(m.complexity for m in metrics) / len(metrics)
-        issue_count = sum(len(m.issues) for m in metrics)
+        weighted = [(metric, self._context_weight(getattr(metric, "context", "production"))) for metric in metrics]
+        total_weight = sum(weight for _, weight in weighted) or 1
+        maintainability_average = sum(m.maintainability_index * weight for m, weight in weighted) / total_weight
+        complexity_average = sum(m.complexity * weight for m, weight in weighted) / total_weight
+        issue_count = sum(len(m.issues) * weight for m, weight in weighted)
 
         score = (
             max(0, min(100, maintainability_average)) * 0.55
@@ -369,7 +389,13 @@ class AgentOrchestrator:
 
         return round(max(0, min(100, 100 - penalty)), 2)
 
-    def _test_score(self, generated_tests, coverage: float, generation_metadata: dict | None = None) -> float:
+    def _test_score(
+        self,
+        generated_tests,
+        coverage: float,
+        generation_metadata: dict | None = None,
+        coverage_result=None,
+    ) -> float:
         metadata = generation_metadata or {}
         executable_count = int(metadata.get("executable_tests", len(generated_tests)) or 0)
         smoke_count = int(metadata.get("smoke_tests", 0) or 0)
@@ -386,12 +412,35 @@ class AgentOrchestrator:
             else:
                 behavioral_weight += 3
         generation_score = min(40, behavioral_weight or (executable_count * 5 + smoke_count))
-        coverage_score = min(60, coverage * 0.6)
+        coverage_measured = self._coverage_measured(coverage_result)
+        coverage_score = min(60, coverage * 0.6) if coverage_measured else 0
+        readiness_evidence_score = min(10, executable_count * 2) if not coverage_measured else 0
 
-        if coverage == 0 and executable_count:
-            coverage_score = 20
+        return round(min(100, generation_score + coverage_score + readiness_evidence_score), 2)
 
-        return round(min(100, generation_score + coverage_score), 2)
+    def _coverage_measured(self, coverage_result) -> bool:
+        return bool(
+            coverage_result
+            and getattr(coverage_result, "measured", False)
+            and getattr(coverage_result, "available", False)
+        )
+
+    def _testing_scoring_summary(self, generated_tests, generation_metadata: dict | None, coverage_result) -> dict:
+        metadata = generation_metadata or {}
+        coverage_measured = self._coverage_measured(coverage_result)
+        return {
+            "generated_candidate_weight": "Only executable, non-placeholder generated candidates contribute readiness points.",
+            "coverage_evidence": "measured" if coverage_measured else getattr(coverage_result, "evidence_state", "unavailable"),
+            "coverage_score_component": round(min(60, getattr(coverage_result, "coverage_percent", 0) * 0.6), 2) if coverage_measured else 0,
+            "missing_coverage_evidence": not coverage_measured,
+            "missing_evidence_note": (
+                "Coverage was not treated as 0%; the testing score received only a limited readiness contribution from generated candidates."
+                if not coverage_measured
+                else ""
+            ),
+            "ready_to_execute": int(metadata.get("executable_tests", len(generated_tests)) or 0),
+            "smoke_tests": int(metadata.get("smoke_tests", 0) or 0),
+        }
 
     def _security_context_summary(self, findings) -> dict:
         summary = {
@@ -431,10 +480,25 @@ class AgentOrchestrator:
             "top_remediation": remediation[:5],
         }
 
-    def _quality_summary(self, metrics) -> dict:
+    def _quality_summary(self, metrics, security_findings=None) -> dict:
+        security_findings = security_findings or []
         smells = {}
         recommendations = []
         hotspots = []
+        security_by_file = {}
+
+        for finding in security_findings:
+            file_path = getattr(finding, "file", "")
+            if not file_path:
+                continue
+            severity = str(getattr(getattr(finding, "severity", ""), "value", getattr(finding, "severity", ""))).lower()
+            security_by_file[file_path] = security_by_file.get(file_path, 0) + {
+                "critical": 8,
+                "high": 5,
+                "medium": 2,
+                "low": 0.5,
+                "info": 0.1,
+            }.get(severity, 1)
 
         for metric in metrics:
             for smell in getattr(metric, "smells", [])[:10]:
@@ -445,11 +509,14 @@ class AgentOrchestrator:
                     recommendations.append(rec)
             issue_count = len(getattr(metric, "issues", []))
             if issue_count:
+                risk_score = self._quality_metric_risk_score(metric, security_by_file.get(metric.file, 0))
                 hotspots.append({
                     "file": metric.file,
+                    "context": getattr(metric, "context", "production") or "production",
                     "issues": issue_count,
                     "maintainability": metric.maintainability_index,
                     "complexity": metric.complexity,
+                    "risk_score": risk_score,
                 })
 
         def context_rank(context: str) -> int:
@@ -462,19 +529,97 @@ class AgentOrchestrator:
                 "docs": 5,
             }.get(str(context or "production").lower(), 6)
 
+        sorted_hotspots = sorted(
+            hotspots,
+            key=lambda item: (
+                context_rank(item.get("context")),
+                -item["risk_score"],
+                -item["issues"],
+            ),
+        )
+        production_hotspots = [
+            item for item in sorted_hotspots
+            if str(item.get("context", "production")).lower() in {"production", "config", "ci"}
+        ]
+        test_hotspots = [
+            item for item in sorted_hotspots
+            if str(item.get("context", "")).lower() == "test"
+        ]
+
         return {
             "smells": smells,
             "recommendations": recommendations[:8],
-            "hotspots": sorted(
-                hotspots,
-                key=lambda item: (
-                    context_rank(next((m.context for m in metrics if m.file == item["file"]), "production")),
-                    -item["issues"],
-                ),
-            )[:10],
+            "hotspots": sorted_hotspots[:10],
+            "highest_production_risk": production_hotspots[0] if production_hotspots else (sorted_hotspots[0] if sorted_hotspots else None),
+            "test_suite_hotspot": test_hotspots[0] if test_hotspots else None,
         }
 
-    def _generated_tests_summary(self, tests, generation_metadata: dict | None = None) -> dict:
+    def _quality_metric_risk_score(self, metric, security_weight: float = 0) -> float:
+        context = getattr(metric, "context", "production")
+        base = (
+            len(getattr(metric, "quality_issues", []) or getattr(metric, "issues", [])) * 2.0
+            + max(0, float(getattr(metric, "complexity", 0) or 0) - 4) * 1.5
+            + max(0, 70 - float(getattr(metric, "maintainability_index", 70) or 70)) * 0.35
+            + int(getattr(metric, "large_classes", 0) or 0) * 5
+            + int(getattr(metric, "long_methods", 0) or 0) * 3
+            + int(getattr(metric, "duplicate_blocks", 0) or 0) * 3
+            + int(getattr(metric, "too_many_parameters", 0) or 0) * 1.5
+            + int(getattr(metric, "max_nesting_depth", 0) or 0) * 0.8
+            + security_weight
+        )
+        return round(base * self._context_weight(context), 2)
+
+    def _context_weight(self, context: str) -> float:
+        return {
+            "production": 1.0,
+            "config": 0.75,
+            "ci": 0.65,
+            "test": 0.35,
+            "example": 0.2,
+            "docs": 0.15,
+            "api_example": 0.15,
+            "constants": 0.7,
+            "generated/vendor": 0.05,
+        }.get(str(context or "production").lower(), 0.8)
+
+    def _assessment_confidence(
+        self,
+        coverage_result,
+        quality_analysis_metadata: dict | None,
+        generation_metadata: dict | None,
+    ) -> dict:
+        quality_analysis_metadata = quality_analysis_metadata or {}
+        generation_metadata = generation_metadata or {}
+        notes = []
+        coverage_measured = self._coverage_measured(coverage_result)
+        if not coverage_measured:
+            notes.append("Coverage was not measured in this run.")
+        if quality_analysis_metadata.get("partial_analysis"):
+            notes.append("Quality analysis was capped for performance.")
+        if generation_metadata.get("needs_human_test_design"):
+            notes.append("Some targets require project-specific fixtures before tests can be generated safely.")
+
+        confidence = "high"
+        if notes:
+            confidence = "medium"
+        if not coverage_measured and quality_analysis_metadata.get("partial_analysis"):
+            confidence = "low"
+
+        return {
+            "level": confidence,
+            "coverage_evidence": "measured" if coverage_measured else getattr(coverage_result, "evidence_state", "unavailable"),
+            "quality_scope": "partial" if quality_analysis_metadata.get("partial_analysis") else "complete",
+            "generated_test_design_gap_count": len(generation_metadata.get("needs_human_test_design", []) or []),
+            "notes": notes,
+        }
+
+    def _generated_tests_summary(
+        self,
+        tests,
+        generation_metadata: dict | None = None,
+        coverage_result=None,
+        execution_enabled: bool = False,
+    ) -> dict:
         metadata = generation_metadata or {}
         by_type = {}
         by_framework = {}
@@ -493,23 +638,38 @@ class AgentOrchestrator:
             by_assertion_strength[assertion_strength] = by_assertion_strength.get(assertion_strength, 0) + 1
             by_execution_safety[execution_safety] = by_execution_safety.get(execution_safety, 0) + 1
 
+        executed_tests = sum(1 for test in tests if getattr(test, "executed", False))
+        passed = sum(int(getattr(test, "passed", 0) or 0) for test in tests if getattr(test, "executed", False))
+        failed = sum(int(getattr(test, "failed", 0) or 0) for test in tests if getattr(test, "executed", False))
+        execution_status = "disabled" if not execution_enabled else ("executed" if executed_tests else "not_executed")
+        not_executed_reason = ""
+        if not execution_enabled:
+            not_executed_reason = "Generated candidates were not executed because ENABLE_TEST_EXECUTION is disabled."
+        elif not executed_tests:
+            not_executed_reason = "Generated candidates were produced for review but no execution result was captured."
+
         return {
             "total": len(tests),
+            "generated_candidates": len(tests),
             "by_type": by_type,
             "by_framework": by_framework,
             "by_category": by_category,
             "by_assertion_strength": by_assertion_strength,
             "by_execution_safety": by_execution_safety,
             "executable_tests": metadata.get("executable_tests", len(tests)),
+            "ready_to_execute": metadata.get("executable_tests", len(tests)),
             "smoke_tests": metadata.get("smoke_tests", 0),
-            "executed_tests": 0,
-            "passed": 0,
-            "failed": 0,
-            "execution_status": "not_executed",
+            "executed_tests": executed_tests,
+            "passed": passed if executed_tests else None,
+            "failed": failed if executed_tests else None,
+            "execution_status": execution_status,
+            "execution_enabled": execution_enabled,
+            "not_executed_reason": not_executed_reason,
             "needs_review_tests": metadata.get("needs_review_tests", 0),
             "needs_human_test_design": len(metadata.get("needs_human_test_design", [])),
             "skipped_generation_reasons": metadata.get("skipped_generation_reasons", {}),
             "executable_candidates": metadata.get("executable_tests", len(tests)),
+            "coverage_execution_state": getattr(coverage_result, "evidence_state", "unavailable") if coverage_result else "unavailable",
         }
 
     def _now(self) -> str:

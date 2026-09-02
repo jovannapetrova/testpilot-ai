@@ -3,13 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 logger = logging.getLogger("testpilot.email")
 
 
 def email_delivery_configured() -> bool:
-    return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM"))
+    host = os.getenv("SMTP_HOST", "")
+    if host.lower() == "smtp.gmail.com":
+        return bool(host and os.getenv("SMTP_FROM") and os.getenv("SMTP_USERNAME") and os.getenv("SMTP_PASSWORD"))
+    return bool(host and os.getenv("SMTP_FROM"))
 
 
 def send_password_reset_code_email(email: str, code: str) -> bool:
@@ -44,12 +48,23 @@ def _send_email(to_email: str, subject: str, body: str) -> bool:
 
     try:
         with smtplib.SMTP(host, port, timeout=12) as server:
+            server.ehlo()
             if use_tls:
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
             if username and password:
                 server.login(username, password)
             server.send_message(message)
         return True
-    except Exception:
-        logger.exception("Email delivery failed for %s.", subject)
+    except Exception as exc:
+        logger.exception(
+            "Email delivery failed for subject '%s' (host_configured=%s, port=%s, tls=%s, auth_configured=%s, from_configured=%s, error_type=%s).",
+            subject,
+            bool(host),
+            port,
+            use_tls,
+            bool(username and password),
+            bool(os.getenv("SMTP_FROM")),
+            exc.__class__.__name__,
+        )
         return False

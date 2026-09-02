@@ -48,3 +48,42 @@ def test_secret_taxonomy_reduces_common_false_positives(tmp_path):
         and finding.category in {"runtime_secret_reference", "secret_reference", "ci_secret_reference"}
         for finding in findings
     )
+
+
+def test_secret_taxonomy_classifies_placeholders_fixtures_ci_and_real_credentials(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+
+    (tmp_path / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "token = create_verification_code()",
+                "password = settings.password",
+                "api_key = 'sk-1234567890abcdef1234567890abcdef'",
+                "placeholder_secret = 'sk-test-placeholder'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_auth.py").write_text(
+        "password = 'fixture-password'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text(
+        "token: ${{ secrets.GITHUB_TOKEN }}\n",
+        encoding="utf-8",
+    )
+
+    findings = SecurityAgent().run(tmp_path)
+    by_category = {finding.category: finding for finding in findings}
+
+    assert by_category["real_secret_candidate"].severity.value == "high"
+    assert by_category["real_secret_candidate"].confidence == "high"
+    assert by_category["placeholder_secret"].severity.value == "low"
+    assert by_category["test_fixture_secret"].context == "test"
+    assert by_category["ci_secret_reference"].context == "ci"
+    assert not any(
+        finding.category == "real_secret_candidate" and finding.line in {1, 2}
+        for finding in findings
+    )

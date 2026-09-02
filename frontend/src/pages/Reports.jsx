@@ -154,9 +154,9 @@ export default function Reports() {
 
       <div className="reports-stats-grid">
         <ReportCard title="Reports" value={stats.count} icon={FileText} />
-        <ReportCard title="Average Overall" value={stats.overall} />
-        <ReportCard title="Average Security" value={stats.security} />
-        <ReportCard title="Average Testing" value={stats.testing} />
+        <ReportCard title="Average Overall Score" value={stats.overall} />
+        <ReportCard title="Average Security Score" value={stats.security} />
+        <ReportCard title="Average Testing Score" value={stats.testing} />
       </div>
 
       <div className="reports-toolbar">

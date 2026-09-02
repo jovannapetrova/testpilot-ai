@@ -1043,12 +1043,32 @@ def download_report_csv(
 
     writer.writerow(["Metric", "Value"])
     writer.writerow(["Project", report.get("project_name")])
-    writer.writerow(["Overall", report.get("overall_score")])
-    writer.writerow(["Quality", report.get("quality_score")])
-    writer.writerow(["Security", report.get("security_score")])
-    writer.writerow(["Testing", report.get("test_score")])
+    writer.writerow(["Overall Score", report.get("overall_score")])
+    writer.writerow(["Quality Score", report.get("quality_score")])
+    writer.writerow(["Security Score", report.get("security_score")])
+    writer.writerow(["Testing Score", report.get("test_score")])
+    coverage = report.get("coverage", {}) or {}
+    test_summary = report.get("metadata", {}).get("generated_tests_summary", {}) or {}
+    coverage_available = (
+        coverage.get("available")
+        or coverage.get("measured")
+        or (coverage.get("executed") and not coverage.get("estimated"))
+    )
+    coverage_label = coverage.get("display_label") or (
+        f"{coverage.get('coverage_percent', 0)}%"
+        if coverage_available
+        else "Not measured"
+    )
+    executed_tests = int(test_summary.get("executed_tests", 0) or 0)
+    writer.writerow(["Coverage", coverage_label])
+    writer.writerow(["Coverage Evidence State", coverage.get("evidence_state", "unavailable")])
     writer.writerow(["Security Findings", len(report.get("security_findings", []))])
     writer.writerow(["Generated Test Candidates", len(report.get("generated_tests", []))])
+    writer.writerow(["Ready To Execute", test_summary.get("ready_to_execute", test_summary.get("executable_tests", len(report.get("generated_tests", []))))])
+    writer.writerow(["Executed Generated Tests", executed_tests])
+    writer.writerow(["Passed Generated Tests", test_summary.get("passed") if executed_tests else "N/A"])
+    writer.writerow(["Failed Generated Tests", test_summary.get("failed") if executed_tests else "N/A"])
+    writer.writerow(["Needs Human Test Design", test_summary.get("needs_human_test_design", 0)])
     writer.writerow(["Recommendations", len(report.get("recommendations", []))])
 
     return Response(
@@ -1097,14 +1117,84 @@ def compare_reports(
     if not first or not second:
         raise_api_error("NOT_FOUND", "One or both reports not found.", status.HTTP_404_NOT_FOUND)
 
+    def metric_value(report: dict, key: str) -> float | None:
+        if key not in report or report.get(key) is None:
+            return None
+        try:
+            return round(float(report.get(key)), 2)
+        except (TypeError, ValueError):
+            return None
+
     def diff(key):
-        return round(float(second.get(key, 0)) - float(first.get(key, 0)), 2)
+        first_value = metric_value(first, key)
+        second_value = metric_value(second, key)
+        if first_value is None or second_value is None:
+            return None
+        return round(second_value - first_value, 2)
+
+    def report_label(report: dict, other: dict) -> str:
+        name = report.get("project_name") or "Unnamed report"
+        if name == (other.get("project_name") or "Unnamed report"):
+            suffix = str(report.get("project_id") or "")[:8]
+            return f"{name} ({suffix})" if suffix else name
+        return name
+
+    first_label = report_label(first, second)
+    second_label = report_label(second, first)
+
+    def compare_metric(label: str, key: str, unit: str = "points") -> dict:
+        first_value = metric_value(first, key)
+        second_value = metric_value(second, key)
+        if first_value is None or second_value is None:
+            return {
+                "key": key,
+                "label": label,
+                "first_value": first_value,
+                "second_value": second_value,
+                "delta": None,
+                "absolute_delta": None,
+                "direction": "missing",
+                "summary": f"{label} is unavailable for one or both reports.",
+            }
+
+        delta = round(second_value - first_value, 2)
+        absolute_delta = abs(delta)
+        if delta > 0:
+            direction = "second_higher"
+            summary = f"{second_label} is {absolute_delta:g} {unit} higher than {first_label}."
+        elif delta < 0:
+            direction = "second_lower"
+            summary = f"{second_label} is {absolute_delta:g} {unit} lower than {first_label}."
+        else:
+            direction = "equal"
+            summary = f"{first_label} and {second_label} are equal for {label.lower()}."
+
+        return {
+            "key": key,
+            "label": label,
+            "first_value": first_value,
+            "second_value": second_value,
+            "delta": delta,
+            "absolute_delta": absolute_delta,
+            "direction": direction,
+            "summary": summary,
+        }
+
+    metrics = [
+        compare_metric("Overall Score", "overall_score"),
+        compare_metric("Quality Score", "quality_score"),
+        compare_metric("Security Score", "security_score"),
+        compare_metric("Testing Score", "test_score"),
+    ]
 
     return {
         "success": True,
         "comparison": {
             "first": first,
             "second": second,
+            "first_label": first_label,
+            "second_label": second_label,
+            "metrics": metrics,
             "delta": {
                 "overall": diff("overall_score"),
                 "quality": diff("quality_score"),
@@ -1127,7 +1217,16 @@ def dashboard_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    reports = list_reports(user_id=current_user.id, db=db)
+    all_reports = list_reports(user_id=current_user.id, db=db)
+    reports = [report for report in all_reports if report.get("status") == "completed"]
+    active_projects = (
+        db.query(Project)
+        .filter(Project.user_id == current_user.id, Project.status.in_(["queued", "running"]))
+        .order_by(Project.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    active_project_summaries = [project_summary(project) for project in active_projects]
 
     if not reports:
         return {
@@ -1144,6 +1243,9 @@ def dashboard_summary(
                 "risk_distribution": {},
                 "security_findings": 0,
                 "generated_tests": 0,
+                "total_completed_reports": 0,
+                "active_projects": active_project_summaries,
+                "running_projects": len(active_project_summaries),
             },
         }
 
@@ -1180,6 +1282,7 @@ def dashboard_summary(
         "success": True,
         "summary": {
             "total_reports": len(reports),
+            "total_completed_reports": len(reports),
             "avg_overall": avg("overall_score"),
             "avg_quality": avg("quality_score"),
             "avg_security": avg("security_score"),
@@ -1190,6 +1293,8 @@ def dashboard_summary(
             "risk_distribution": risk_levels,
             "security_findings": total_security_findings,
             "generated_tests": total_generated_tests,
+            "active_projects": active_project_summaries,
+            "running_projects": len(active_project_summaries),
         },
     }
 

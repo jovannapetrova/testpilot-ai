@@ -4,8 +4,14 @@ import Toast from "../ui/Toast";
 const pageSize = 5;
 
 export default function GeneratedTestsList({ tests = [], metadata = {} }) {
-  const humanDesign = metadata.needs_human_test_design || [];
+  const humanDesign = Array.isArray(metadata.needs_human_test_design)
+    ? metadata.needs_human_test_design
+    : [];
+  const humanDesignCount = Array.isArray(metadata.needs_human_test_design)
+    ? metadata.needs_human_test_design.length
+    : Number(metadata.needs_human_test_design || 0);
   const skippedReasons = metadata.skipped_generation_reasons || {};
+  const executionDisabled = metadata.execution_enabled === false || metadata.execution_status === "disabled";
   const [expanded, setExpanded] = useState({});
   const [page, setPage] = useState(0);
   const [toast, setToast] = useState("");
@@ -16,7 +22,7 @@ export default function GeneratedTestsList({ tests = [], metadata = {} }) {
     [page, tests],
   );
 
-  if (!tests.length && !humanDesign.length) {
+  if (!tests.length && !humanDesignCount) {
     return <p className="muted-text">No executable generated test candidates were inferred for this report.</p>;
   }
 
@@ -95,7 +101,12 @@ export default function GeneratedTestsList({ tests = [], metadata = {} }) {
               {` | category: ${test.generated_test_category || test.test_type || "unit"}`}
               {` | assertions: ${test.assertion_strength || "medium"}`}
               {` | safety: ${test.execution_safety || "safe"}`}
-              {test.executed ? ` | executed: ${test.passed || 0} passed, ${test.failed || 0} failed` : " | not executed"}
+              {` | readiness: ${test.execution_readiness || (test.needs_review ? "needs human design" : "ready to execute")}`}
+              {test.executed
+                ? ` | executed: ${test.passed || 0} passed, ${test.failed || 0} failed`
+                : executionDisabled
+                  ? " | execution: not executed (disabled)"
+                  : " | execution: not executed"}
             </p>
             <p>{test.rationale}</p>
             {expanded[key] ? (
@@ -107,17 +118,17 @@ export default function GeneratedTestsList({ tests = [], metadata = {} }) {
         );
       })}
 
-      {humanDesign.length ? (
+      {humanDesignCount ? (
         <div className="detail-row">
           <div>
             <strong>Targets requiring human test design</strong>
-            {humanDesign.slice(0, 8).map((item) => (
+            {humanDesign.length ? humanDesign.slice(0, 8).map((item) => (
               <p key={`${item.target}-${item.signature}-${item.reason}`}>
                 {item.target}: {item.reason}
               </p>
-            ))}
+            )) : <p>Some targets require project-specific fixtures or domain knowledge before safe test generation.</p>}
           </div>
-          <span className="severity medium">{humanDesign.length}</span>
+          <span className="severity medium">{humanDesignCount}</span>
         </div>
       ) : null}
 

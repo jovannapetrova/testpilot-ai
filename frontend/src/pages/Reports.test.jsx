@@ -38,6 +38,9 @@ describe("Reports", () => {
     renderWithRouter(<Reports />);
 
     expect(await screen.findAllByText("Billing API")).not.toHaveLength(0);
+    expect(screen.getByText("Average Overall Score")).toBeInTheDocument();
+    expect(screen.getByText("Average Security Score")).toBeInTheDocument();
+    expect(screen.getByText("Average Testing Score")).toBeInTheDocument();
     fireEvent.click(screen.getByTitle("Delete report"));
     const deleteButtons = screen.getAllByRole("button", { name: /delete report/i });
     fireEvent.click(deleteButtons[deleteButtons.length - 1]);

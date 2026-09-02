@@ -8,7 +8,6 @@ export default function Profile() {
   const { user, setSession, session } = useAuth();
   const [profile, setProfile] = useState({
     full_name: user?.full_name || "",
-    avatar_url: user?.avatar_url || "",
   });
   const [password, setPassword] = useState({ current_password: "", new_password: "" });
   const [toast, setToast] = useState("");
@@ -21,7 +20,7 @@ export default function Profile() {
     try {
       setSavingProfile(true);
       setError("");
-      const result = await updateCurrentUser(profile);
+      const result = await updateCurrentUser({ full_name: profile.full_name });
       setSession({ ...session, user: result.user }, session?.remember_me ?? true);
       setToast("Profile updated successfully.");
     } catch (err) {
@@ -64,14 +63,6 @@ export default function Profile() {
             <input
               value={profile.full_name}
               onChange={(event) => setProfile({ ...profile, full_name: event.target.value })}
-            />
-          </label>
-          <label>
-            Avatar URL
-            <input
-              value={profile.avatar_url}
-              onChange={(event) => setProfile({ ...profile, avatar_url: event.target.value })}
-              placeholder="https://..."
             />
           </label>
           <button className="btn btn-primary" disabled={savingProfile}>

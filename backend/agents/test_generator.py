@@ -191,6 +191,8 @@ class TestGeneratorAgent:
                     assertion_strength="high" if test_type == "api" else "medium",
                     execution_safety="safe" if not needs_review else "mocked_or_boundary",
                     generated_test_category=test_type,
+                    execution_readiness="ready_to_execute",
+                    execution_reason="Generated candidate was not executed during static generation.",
                 )
             )
 
@@ -365,7 +367,6 @@ class TestGeneratorAgent:
             f"def {test_name}():",
             "    module = _target_module()",
             f"    fn = {target_expr}",
-            "    assert callable(fn)",
         ]
 
         if not patches:
@@ -415,7 +416,6 @@ class TestGeneratorAgent:
             f"def {test_name}():",
             "    module = _target_module()",
             f"    fn = {target_expr}",
-            "    assert callable(fn)",
             f"    expected_exception = getattr(builtins, '{exception}', None) or getattr(module, '{exception}', Exception)",
             "    with pytest.raises((expected_exception, TypeError, ValueError, AssertionError)):",
             f"        fn({args})",
@@ -1030,7 +1030,10 @@ class TestGeneratorAgent:
                 strategy_name,
             )
             if not test_code.strip():
-                self._record_skipped_generation(relative, "No executable JavaScript/TypeScript generated test could be inferred.")
+                self._record_skipped_generation(
+                    relative,
+                    "No exported pure function, React component, or Express app/router contract was detected for safe Jest generation.",
+                )
                 continue
 
             output_name = self._unique_output_name(f"tests/{path.stem}.generated.test.js", used_output_files)
@@ -1048,6 +1051,8 @@ class TestGeneratorAgent:
                     assertion_strength="high" if test_type in {"api", "component"} else "medium",
                     execution_safety="safe",
                     generated_test_category=test_type,
+                    execution_readiness="ready_to_execute",
+                    execution_reason="Generated candidate was not executed during static generation.",
                 )
             )
 
@@ -1566,7 +1571,10 @@ class TestGeneratorAgent:
                 strategy_name,
             )
             if not test_code.strip():
-                self._record_skipped_generation(relative, "No executable Java/JUnit test could be inferred without project fixtures.")
+                self._record_skipped_generation(
+                    relative,
+                    "No Spring application/controller, simple POJO accessor, or safely constructable Java behavior was detected for JUnit generation.",
+                )
                 continue
 
             output_name = self._unique_output_name(f"src/test/java/{info.class_name}GeneratedTest.java", used_output_files)
@@ -1584,6 +1592,8 @@ class TestGeneratorAgent:
                     assertion_strength="high" if test_type in {"integration", "api"} else "medium",
                     execution_safety="safe",
                     generated_test_category="smoke" if target_kind == "application_context" else test_type,
+                    execution_readiness="ready_to_execute",
+                    execution_reason="Generated candidate was not executed during static generation.",
                 )
             )
 

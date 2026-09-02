@@ -139,9 +139,31 @@ class QualityAgent:
         if complexity > 10:
             metric.issues.append("High estimated branching complexity")
             metric.smells.append("High branching complexity")
+            self._add_quality_issue(
+                metric,
+                "high_complexity",
+                1,
+                max(1, len(text.splitlines())),
+                f"Estimated branching complexity is {complexity}.",
+                "Complex branching raises defect risk and makes boundary testing harder.",
+                "Extract smaller functions and cover branch-heavy behavior with focused tests.",
+                "medium",
+                "major",
+            )
 
         if maintainability < 50:
             metric.issues.append("Low estimated maintainability")
+            self._add_quality_issue(
+                metric,
+                "low_maintainability",
+                1,
+                max(1, len(text.splitlines())),
+                f"Estimated maintainability is {maintainability}.",
+                "Low maintainability usually means changes are riskier and harder to review.",
+                "Split high-risk modules and add tests around the most complex branches.",
+                "medium",
+                "major",
+            )
 
         self._apply_text_smells(metric, text, language="javascript")
         return metric
@@ -182,9 +204,31 @@ class QualityAgent:
         if complexity > 10:
             metric.issues.append("High estimated branching complexity")
             metric.smells.append("High branching complexity")
+            self._add_quality_issue(
+                metric,
+                "high_complexity",
+                1,
+                max(1, len(text.splitlines())),
+                f"Estimated branching complexity is {complexity}.",
+                "Complex branching raises defect risk and makes boundary testing harder.",
+                "Extract smaller methods or collaborators and cover branch-heavy behavior with focused tests.",
+                "medium",
+                "major",
+            )
 
         if maintainability < 50:
             metric.issues.append("Low estimated maintainability")
+            self._add_quality_issue(
+                metric,
+                "low_maintainability",
+                1,
+                max(1, len(text.splitlines())),
+                f"Estimated maintainability is {maintainability}.",
+                "Low maintainability usually means changes are riskier and harder to review.",
+                "Split high-risk classes and add characterization tests before refactoring.",
+                "medium",
+                "major",
+            )
 
         self._apply_text_smells(metric, text, language="java")
         return metric
@@ -592,6 +636,13 @@ class QualityAgent:
                 "venv/",
                 "dist/",
                 "build/",
+                "coverage/",
+                ".next/",
+                ".vite/",
+                "vendor/",
+                "generated/",
+                "third_party/",
+                "third-party/",
             ]
         )
 

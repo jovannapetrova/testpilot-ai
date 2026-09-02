@@ -22,6 +22,12 @@ def build_ai_insights(report_data: dict) -> dict:
     quality_metrics = report_data.get("quality_metrics", [])
     generated_tests = report_data.get("generated_tests", [])
     coverage = report_data.get("coverage", {}) or {}
+    coverage_measured = bool(coverage.get("measured") and coverage.get("available"))
+    coverage_label = coverage.get("display_label") or (
+        f"{coverage.get('coverage_percent', 0)}%"
+        if coverage_measured
+        else "Not measured"
+    )
 
     real_security_findings = [
         finding for finding in security_findings
@@ -61,7 +67,17 @@ def build_ai_insights(report_data: dict) -> dict:
             "estimated_effort": "small",
             "business_impact": "Improves confidence without creating unnecessary incident work.",
         })
-    if scores["Testing"] < 70:
+    if scores["Testing"] < 70 and not coverage_measured:
+        priority_actions.append({
+            "priority": "medium",
+            "what": "Configure measured coverage for release evidence.",
+            "why": "Generated test candidates are useful design output, but production execution is disabled or coverage evidence is unavailable.",
+            "impact": "Prevents stakeholders from confusing generated candidates with executed passing tests.",
+            "how_to_fix": "Enable coverage collection in a controlled environment and rerun the analysis before using coverage as a release gate.",
+            "estimated_effort": "medium",
+            "business_impact": "Improves audit credibility and release confidence.",
+        })
+    elif scores["Testing"] < 70:
         priority_actions.append({
             "priority": "high",
             "what": "Increase coverage for core production modules.",
@@ -116,5 +132,7 @@ def build_ai_insights(report_data: dict) -> dict:
             "generated_tests": len(generated_tests),
             "coverage_percent": coverage.get("coverage_percent", 0),
             "coverage_estimated": coverage.get("estimated", False),
+            "coverage_measured": coverage_measured,
+            "coverage_display_label": coverage_label,
         },
     }

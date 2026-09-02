@@ -45,6 +45,25 @@ def _report_metadata(report_data: dict, json_path: Path | None = None, pdf_path:
 def build_markdown_report(report: dict) -> str:
     insights = report.get("metadata", {}).get("ai_insights", {})
     intelligence = report.get("metadata", {}).get("project_intelligence", {})
+    coverage = report.get("coverage", {}) or {}
+    coverage_available = (
+        coverage.get("available")
+        or coverage.get("measured")
+        or (coverage.get("executed") and not coverage.get("estimated"))
+    )
+    generated_summary = (
+        report.get("metadata", {}).get("generated_tests_summary", {})
+        or report.get("metadata", {}).get("test_generation_metadata", {})
+        or {}
+    )
+    coverage_label = coverage.get("display_label") or (
+        f"{coverage.get('coverage_percent', 0)}%"
+        if coverage_available
+        else "Not measured"
+    )
+    executed_tests = int(generated_summary.get("executed_tests", 0) or 0)
+    passed_value = generated_summary.get("passed") if executed_tests else "N/A"
+    failed_value = generated_summary.get("failed") if executed_tests else "N/A"
 
     md = f"""# TestPilot AI Report
 
@@ -72,6 +91,12 @@ def build_markdown_report(report: dict) -> str:
 ## Findings
 - Security findings: {len(report.get("security_findings", []))}
 - Generated test candidates: {len(report.get("generated_tests", []))}
+- Ready to execute: {generated_summary.get("ready_to_execute", generated_summary.get("executable_tests", len(report.get("generated_tests", []))))}
+- Executed generated tests: {executed_tests}
+- Passed generated tests: {passed_value}
+- Failed generated tests: {failed_value}
+- Coverage: {coverage_label}
+- Coverage evidence: {coverage.get("evidence_state", "unavailable")}
 - Recommendations: {len(report.get("recommendations", []))}
 
 ## Recommendations
@@ -165,6 +190,11 @@ def _db_report_metadata(report: Report) -> dict:
     intelligence = metadata.get("project_intelligence", {}) or {}
     insights = metadata.get("ai_insights", {}) or {}
     coverage = report_data.get("coverage", {}) if isinstance(report_data, dict) else {}
+    coverage_available = (
+        coverage.get("available")
+        or coverage.get("measured")
+        or (coverage.get("executed") and not coverage.get("estimated"))
+    )
     project = report.project
 
     return {
@@ -179,7 +209,15 @@ def _db_report_metadata(report: Report) -> dict:
         "security_score": report.security_score,
         "test_score": report.test_score,
         "coverage_percent": coverage.get("coverage_percent", 0),
+        "coverage_display_label": coverage.get("display_label") or (
+            f"{coverage.get('coverage_percent', 0)}%"
+            if coverage_available
+            else "Not measured"
+        ),
         "coverage_estimated": coverage.get("estimated", False),
+        "coverage_measured": coverage.get("measured", coverage_available),
+        "coverage_available": coverage_available,
+        "coverage_evidence_state": coverage.get("evidence_state", "unavailable"),
         "security_findings_count": len(report_data.get("security_findings", [])) if isinstance(report_data, dict) else 0,
         "generated_tests_count": len(report_data.get("generated_tests", [])) if isinstance(report_data, dict) else 0,
         "recommendations_count": len(report_data.get("recommendations", [])) if isinstance(report_data, dict) else 0,
@@ -377,6 +415,18 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
 
     metadata = report.get("metadata", {})
     insights = metadata.get("ai_insights", {})
+    coverage = report.get("coverage", {}) or {}
+    coverage_available = (
+        coverage.get("available")
+        or coverage.get("measured")
+        or (coverage.get("executed") and not coverage.get("estimated"))
+    )
+    generated_summary = metadata.get("generated_tests_summary", {}) or {}
+    coverage_label = coverage.get("display_label") or (
+        f"{coverage.get('coverage_percent', 0)}%"
+        if coverage_available
+        else "Not measured"
+    )
 
     story.append(Paragraph("TestPilot AI", styles["TitleCustom"]))
     story.append(
@@ -434,6 +484,10 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
                     [
                         "Generated Test Candidates",
                         insights.get("statistics", {}).get("generated_tests", 0),
+                    ],
+                    [
+                        "Coverage",
+                        insights.get("statistics", {}).get("coverage_display_label", coverage_label),
                     ],
                 ],
                 [6 * cm, 10 * cm],
@@ -515,17 +569,45 @@ def generate_pdf_report(pdf_path: Path, report: dict) -> None:
 
     tests = report.get("generated_tests", [])
 
+    story.append(Paragraph("Coverage Summary", styles["SectionTitle"]))
+    story.append(
+        table(
+            [
+                ["Metric", "Value"],
+                ["Coverage", coverage_label],
+                ["Evidence state", coverage.get("evidence_state", "unavailable")],
+                ["Measured", coverage.get("measured", False)],
+                ["Reason", coverage.get("reason", "") or "Coverage execution completed."],
+            ],
+            [6 * cm, 10 * cm],
+        )
+    )
+
     if tests:
         story.append(Paragraph("Generated Test Candidates Summary", styles["SectionTitle"]))
 
-        rows = [["Target", "File", "Execution"]]
+        rows = [["Metric", "Value"]]
+        executed_tests = int(generated_summary.get("executed_tests", 0) or 0)
+        rows.extend([
+            ["Generated candidates", generated_summary.get("generated_candidates", len(tests))],
+            ["Ready to execute", generated_summary.get("ready_to_execute", generated_summary.get("executable_tests", len(tests)))],
+            ["Smoke checks", generated_summary.get("smoke_tests", 0)],
+            ["Executed", executed_tests],
+            ["Passed", generated_summary.get("passed") if executed_tests else "N/A"],
+            ["Failed", generated_summary.get("failed") if executed_tests else "N/A"],
+            ["Needs human design", generated_summary.get("needs_human_test_design", 0)],
+            ["Execution state", generated_summary.get("execution_status", "not_executed")],
+        ])
+        story.append(table(rows, [7 * cm, 9 * cm]))
+
+        rows = [["Target", "File", "Readiness"]]
 
         for test in tests[:12]:
             rows.append(
                 [
                     Paragraph(str(test.get("target", "")), styles["SmallText"]),
                     Paragraph(str(test.get("file", "")), styles["SmallText"]),
-                    str(test.get("execution_status", "not_executed")),
+                    str(test.get("execution_readiness", "ready_to_execute")),
                 ]
             )
 

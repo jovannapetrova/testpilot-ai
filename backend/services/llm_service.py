@@ -26,10 +26,10 @@ class LLMService:
             })
         if context.get("coverage", 0) < 70:
             recs.append({
-                "title": "Increase test coverage",
+                "title": "Add measured coverage for uncovered production paths",
                 "priority": "medium",
-                "description": "Coverage is below the recommended threshold for maintainable software.",
-                "suggested_action": "Add unit tests for edge cases, validation logic, and error handling paths."
+                "description": "Measured coverage evidence is below the recommended threshold for maintainable software.",
+                "suggested_action": "Add behavioral tests for edge cases, validation logic, and error handling paths, then rerun coverage collection."
             })
         if context.get("complexity", 0) > 10:
             recs.append({

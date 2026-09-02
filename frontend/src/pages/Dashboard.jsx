@@ -92,14 +92,14 @@ export default function Dashboard() {
   const metrics = [
     {
       title: "Completed Analyses",
-      value: summary?.total_reports ?? 0,
+      value: summary?.total_completed_reports ?? summary?.total_reports ?? 0,
       subtitle: "Audit-ready outputs",
       icon: FileText,
     },
     {
-      title: "Average Overall",
+      title: "Average Overall Score",
       value: summary?.avg_overall ?? average(latest, "overall_score"),
-      subtitle: "Average platform score",
+      subtitle: "Completed reports only",
       icon: Activity,
     },
     {
@@ -111,13 +111,13 @@ export default function Dashboard() {
     {
       title: "Generated Test Candidates",
       value: summary?.generated_tests ?? 0,
-      subtitle: "Generated, not assumed executed",
+      subtitle: "Generated, not executed evidence",
       icon: TestTube2,
     },
     {
-      title: "Quality Score",
+      title: "Average Quality Score",
       value: summary?.avg_quality ?? average(latest, "quality_score"),
-      subtitle: "Maintainability average",
+      subtitle: "Completed reports only",
       icon: Code2,
     },
     {
@@ -157,7 +157,7 @@ export default function Dashboard() {
         </div>
 
         <div className="score-panel">
-          <span>Average</span>
+          <span>Average Overall Score</span>
           <strong>{summary?.avg_overall ?? 0}</strong>
           <small>/100</small>
         </div>
@@ -300,7 +300,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <AgentTimeline logs={latestLogs} />
+        <AgentTimeline logs={latestLogs} running={Boolean(summary?.running_projects)} />
       </section>
     </div>
   );

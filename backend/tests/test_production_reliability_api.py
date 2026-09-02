@@ -299,6 +299,18 @@ def test_forgot_password_keeps_unknown_email_response_generic(monkeypatch):
     assert len(deliveries) == 1
 
 
+def test_forgot_password_smtp_failure_uses_generic_response(monkeypatch):
+    session = _register("smtp-failure")
+    monkeypatch.setattr("main.email_delivery_configured", lambda: True)
+    monkeypatch.setattr("main.send_password_reset_code_email", lambda email, code: False)
+
+    response = client.post("/auth/forgot-password", json={"email": session["user"]["email"]})
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "If an account exists for that email, a verification code will be sent shortly."
+    assert "debug_reset_token" not in response.json()
+
+
 def test_password_reset_validates_password_strength_and_confirmation(monkeypatch):
     session = _register("reset-validation")
     email = session["user"]["email"]
@@ -359,6 +371,67 @@ def test_report_download_delete_and_compare_are_user_scoped():
 
     owner_report = client.get(f"/reports/{project_a}", headers=_auth_headers(user_a))
     assert owner_report.status_code == 200
+
+
+def test_report_comparison_includes_directional_metric_summaries():
+    user = _register("compare")
+    project_one = f"project-{uuid4().hex[:8]}"
+    project_two = f"project-{uuid4().hex[:8]}"
+    _insert_report(user["user"]["id"], project_one, "Redux", 77)
+    _insert_report(user["user"]["id"], project_two, "Express", 73)
+
+    response = client.get(
+        f"/reports/compare/{project_one}/{project_two}",
+        headers=_auth_headers(user),
+    )
+
+    assert response.status_code == 200
+    comparison = response.json()["comparison"]
+    overall = comparison["metrics"][0]
+    assert overall["label"] == "Overall Score"
+    assert overall["direction"] == "second_lower"
+    assert overall["absolute_delta"] == 4
+    assert "Express is 4 points lower than Redux." == overall["summary"]
+    assert comparison["delta"]["overall"] == -4
+
+
+def test_dashboard_summary_uses_only_completed_owned_reports():
+    user_a = _register("dashboard-owner")
+    user_b = _register("dashboard-other")
+    project_a = f"project-{uuid4().hex[:8]}"
+    project_failed = f"project-{uuid4().hex[:8]}"
+    project_b = f"project-{uuid4().hex[:8]}"
+    _insert_report(user_a["user"]["id"], project_a, "Completed Owned", 80)
+    _insert_report(user_b["user"]["id"], project_b, "Other User", 10)
+
+    db = SessionLocal()
+    try:
+        db.add(Project(id=project_failed, user_id=user_a["user"]["id"], name="Failed Owned", source_type="upload", status="failed"))
+        db.add(
+            Report(
+                project_id=project_failed,
+                user_id=user_a["user"]["id"],
+                project_name="Failed Owned",
+                status="failed",
+                language="Python",
+                overall_score=10,
+                quality_score=10,
+                security_score=10,
+                test_score=10,
+                report_json=json.dumps(_report_payload(project_failed, "Failed Owned", 10) | {"status": "failed"}),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    summary = client.get("/dashboard/summary", headers=_auth_headers(user_a))
+
+    assert summary.status_code == 200
+    data = summary.json()["summary"]
+    assert data["total_reports"] == 1
+    assert data["avg_overall"] == 80
+    assert [report["project_id"] for report in data["latest_reports"]] == [project_a]
 
 
 def test_zip_upload_rejects_malformed_traversal_and_too_many_files():

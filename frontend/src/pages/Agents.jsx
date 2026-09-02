@@ -9,7 +9,7 @@ const agentCards = [
   ["Security Agent", "Groups security findings with confidence, context and remediation.", "Security"],
   ["Quality Agent", "Evaluates maintainability, complexity, duplication and code smells.", "Quality"],
   ["Test Generator Agent", "Creates executable tests and separates human-design targets.", "Testing"],
-  ["Coverage Agent", "Runs or estimates coverage with clear execution notes.", "Coverage"],
+  ["Coverage Agent", "Measures coverage when execution is enabled and labels unavailable evidence clearly.", "Coverage"],
   ["Recommendation Agent", "Turns findings into prioritized engineering actions.", "Insights"],
   ["Report Agent", "Builds audit-ready JSON, PDF, CSV and Markdown reports.", "Reporting"],
 ];

@@ -520,9 +520,12 @@ class SecurityAgent:
         normalized_value = str(value or "").strip().strip("'\"")
         lowered_line = line.lower()
         placeholder = self._looks_like_placeholder(normalized_value, line)
-        known_prefix = bool(re.search(r"\b(ghp_|github_pat_|sk-|xox[baprs]-|AKIA|AIza|ya29\.)", normalized_value))
+        known_prefix = (
+            bool(re.search(r"\b(ghp_|github_pat_|sk-|xox[baprs]-|AKIA|AIza|ya29\.)", normalized_value))
+            and len(normalized_value) >= 16
+        )
         entropyish = (
-            len(normalized_value) >= 20
+            len(normalized_value) >= 24
             and self._entropy(normalized_value) >= 3.2
             and bool(re.search(r"[A-Za-z]", normalized_value))
             and bool(re.search(r"\d", normalized_value))
@@ -540,21 +543,6 @@ class SecurityAgent:
                 "A credential-like function parameter has a literal default value.",
                 "Remove literal credential defaults from signatures and inject values from configuration or tests.",
                 "Literal defaults on authentication parameters may accidentally become reusable credentials.",
-            )
-
-        if known_prefix or entropyish or is_private_key:
-            severity = FindingSeverity.high if context == "production" else FindingSeverity.low
-            confidence = "high" if context == "production" else "medium"
-            false_positive = "low" if context == "production" else "medium"
-            return self._secret_taxonomy_payload(
-                "real_secret_candidate",
-                "Real secret candidate",
-                severity,
-                confidence,
-                false_positive,
-                "A high-entropy or known-format credential-like literal was detected.",
-                "Rotate the value if it is live, move it to a managed secret store, and add secret scanning to CI.",
-                "A real exposed credential may allow unauthorized access.",
             )
 
         if self._is_ci_secret_reference(normalized_value, line, context):
@@ -593,17 +581,8 @@ class SecurityAgent:
                 "Runtime references usually indicate secret usage, not secret leakage.",
             )
 
-        if context in {"test", "example", "docs", "api_example"} and not (known_prefix or entropyish or is_private_key):
-            return self._secret_taxonomy_payload(
-                "test_fixture_secret",
-                "Test/example fixture secret",
-                FindingSeverity.low,
-                "low",
-                "high",
-                "A credential-like value appears in test/example material and looks like fixture data.",
-                "Keep fixture secrets obviously fake and prevent them from being reused in production.",
-                "Fixture values are usually low impact unless they match live credentials.",
-            )
+        if self._is_dynamic_secret_assignment(normalized_value, line):
+            return {"skip": True}
 
         if placeholder:
             return self._secret_taxonomy_payload(
@@ -615,6 +594,33 @@ class SecurityAgent:
                 "A placeholder or template secret value was detected.",
                 "Ensure placeholders are replaced by managed secrets during deployment and never committed with real values.",
                 "Placeholders are low risk but can hide missing production configuration.",
+            )
+
+        if known_prefix or entropyish or is_private_key:
+            severity = FindingSeverity.high if context == "production" else FindingSeverity.low
+            confidence = "high" if context == "production" else "medium"
+            false_positive = "low" if context == "production" else "medium"
+            return self._secret_taxonomy_payload(
+                "real_secret_candidate",
+                "Real secret candidate",
+                severity,
+                confidence,
+                false_positive,
+                "A high-entropy or known-format credential-like literal was detected.",
+                "Rotate the value if it is live, move it to a managed secret store, and add secret scanning to CI.",
+                "A real exposed credential may allow unauthorized access.",
+            )
+
+        if context in {"test", "example", "docs", "api_example"} and not (known_prefix or entropyish or is_private_key):
+            return self._secret_taxonomy_payload(
+                "test_fixture_secret",
+                "Test/example fixture secret",
+                FindingSeverity.low,
+                "low",
+                "high",
+                "A credential-like value appears in test/example material and looks like fixture data.",
+                "Keep fixture secrets obviously fake and prevent them from being reused in production.",
+                "Fixture values are usually low impact unless they match live credentials.",
             )
 
         return self._secret_taxonomy_payload(
@@ -684,6 +690,16 @@ class SecurityAgent:
         if re.match(r"^(this|self|config|settings|options|opts|req|request|ctx|context|credentials)\.", lowered):
             return True
         return bool(re.search(r"=\s*(this|self|config|settings|options|credentials)\.[A-Za-z0-9_.]+", lowered))
+
+    def _is_dynamic_secret_assignment(self, value: str, line: str) -> bool:
+        lowered = line.lower()
+        if re.search(r"[:=]\s*['\"]", line):
+            return False
+        if re.search(r"[:=]\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(", line):
+            return True
+        if re.search(r"[:=]\s*(this|self|config|settings|options|opts|request|req|ctx|context|credentials)\b", lowered):
+            return True
+        return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", value or ""))
 
     def _secret_confidence(self, value: str, line: str, context: str, placeholder: bool) -> str:
         known_prefix = bool(re.search(r"\b(ghp_|github_pat_|sk-|xox[baprs]-|AKIA|AIza|ya29\.)", value))

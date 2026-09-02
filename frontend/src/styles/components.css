@@ -367,6 +367,20 @@
   gap: 10px;
 }
 
+.agent-idle-panel {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.agent-idle-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .timeline-item {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
@@ -491,6 +505,14 @@
 .upload-summary strong,
 .compare-result strong {
   font-size: 20px;
+}
+
+.analysis-grid small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .analysis-tabs {

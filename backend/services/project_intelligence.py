@@ -16,11 +16,8 @@ def build_project_intelligence(project_profile: dict, dependency_profile: dict) 
     else:
         risks.append("No explicit test files were detected.")
 
-    docker_relevant = project_category in {"web_api", "backend_service", "graphql_api", "data_ml"}
     if project_profile.get("has_docker"):
         strengths.append("Docker configuration detected.")
-    elif docker_relevant:
-        risks.append("Docker configuration was not detected.")
 
     dependency_count = dependency_profile.get("total_dependencies", 0)
     dependency_health = dependency_profile.get("dependency_health", {})
@@ -31,8 +28,6 @@ def build_project_intelligence(project_profile: dict, dependency_profile: dict) 
         risks.append("No dependency manifest was detected.")
     elif dependency_count <= 10:
         strengths.append("Dependency footprint is small.")
-    else:
-        risks.append("Dependency footprint should be reviewed.")
 
     for factor in dependency_health.get("risk_factors", [])[:3]:
         if factor not in risks:

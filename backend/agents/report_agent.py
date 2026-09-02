@@ -41,6 +41,17 @@ class ReportAgent:
         quality_analysis_metadata = report.metadata.get("quality_analysis_metadata", {})
         test_summary = report.metadata.get("generated_tests_summary", {})
         coverage_summary = report.metadata.get("coverage_summary", {})
+        coverage_available = (
+            coverage_summary.get("available")
+            or coverage_summary.get("measured")
+            or (coverage_summary.get("executed") and not coverage_summary.get("estimated"))
+        )
+        coverage_label = coverage_summary.get("display_label") or (
+            f"{coverage_summary.get('coverage_percent', report.coverage.coverage_percent)}%"
+            if coverage_available
+            else "Not measured"
+        )
+        coverage_state = coverage_summary.get("evidence_state", "unavailable")
 
         story.append(self._table([
             ["Project", report.project_name],
@@ -68,7 +79,7 @@ class ReportAgent:
             ["Risk Area", "Signal", "Impact"],
             ["Security", f"{security_summary.get('total_grouped_findings', len(report.security_findings))} grouped findings", "Potential exploitability, compliance, and data exposure risk."],
             ["Quality", f"{len(quality_summary.get('hotspots', []))} hotspot files", "Higher defect rate and slower delivery."],
-            ["Coverage", f"{coverage_summary.get('coverage_percent', report.coverage.coverage_percent)}% coverage", "Regression risk if low or estimated."],
+            ["Coverage", coverage_label, "Regression evidence is strongest when measured coverage is available."],
             ["Critical/High Findings", f"{severity.get('critical', 0)} critical / {severity.get('high', 0)} high", "Prioritize before release."],
         ], header=True))
 
@@ -101,9 +112,10 @@ class ReportAgent:
         story.append(Paragraph("Coverage Summary", styles["Heading2"]))
         story.append(self._table([
             ["Metric", "Value"],
-            ["Coverage", coverage_summary.get("coverage_percent", report.coverage.coverage_percent)],
+            ["Coverage", coverage_label],
+            ["Evidence state", coverage_state],
             ["Tool", coverage_summary.get("tool", report.coverage.tool)],
-            ["Estimated", coverage_summary.get("estimated", report.coverage.estimated)],
+            ["Measured", coverage_summary.get("measured", report.coverage.measured)],
             ["Reason", coverage_summary.get("reason", report.coverage.reason) or "Coverage execution completed."],
         ], header=True))
 
@@ -112,8 +124,13 @@ class ReportAgent:
         story.append(self._table([
             ["Metric", "Value"],
             ["Generated test candidates", test_summary.get("total", len(report.generated_tests))],
-            ["Executable candidates", test_summary.get("executable_tests", len(report.generated_tests))],
-            ["Smoke tests", test_summary.get("smoke_tests", 0)],
+            ["Ready to execute", test_summary.get("ready_to_execute", test_summary.get("executable_tests", len(report.generated_tests)))],
+            ["Smoke checks", test_summary.get("smoke_tests", 0)],
+            ["Executed", test_summary.get("executed_tests", 0)],
+            ["Passed", test_summary.get("passed", "N/A") if test_summary.get("executed_tests", 0) else "N/A"],
+            ["Failed", test_summary.get("failed", "N/A") if test_summary.get("executed_tests", 0) else "N/A"],
+            ["Execution state", test_summary.get("execution_status", "not_executed")],
+            ["Execution note", test_summary.get("not_executed_reason", "")],
             ["Needs human test design", test_summary.get("needs_human_test_design", 0)],
             ["Types", ", ".join(f"{k}: {v}" for k, v in test_summary.get("by_type", {}).items())],
             ["Categories", ", ".join(f"{k}: {v}" for k, v in test_summary.get("by_category", {}).items())],
@@ -142,6 +159,7 @@ class ReportAgent:
         appendix_rows.append(["Dependency risk", report.metadata.get("dependency_profile", {}).get("risk_level", "Unknown")])
         appendix_rows.append(["Security remediation", "; ".join(security_summary.get("top_remediation", [])[:4])])
         appendix_rows.append(["Coverage notes", "; ".join(report.coverage.low_coverage_reasons[:4])])
+        appendix_rows.append(["Assessment confidence", report.metadata.get("assessment_confidence", {}).get("level", "Unknown")])
         story.append(self._table(appendix_rows, header=True))
 
         story.append(Spacer(1, 16))
